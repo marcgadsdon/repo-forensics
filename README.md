@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-3.8%2B-blue.svg" alt="Python 3.8+">
   <img src="https://img.shields.io/badge/dependencies-zero-brightgreen.svg" alt="Zero Dependencies">
   <img src="https://img.shields.io/badge/scanners-19-orange.svg" alt="19 Scanners">
-  <img src="https://img.shields.io/badge/patterns-700%2B-red.svg" alt="700+ Patterns">
+  <img src="https://img.shields.io/badge/patterns-750%2B-red.svg" alt="750+ Patterns">
   <img src="https://img.shields.io/badge/CVE%20%2B%20CISA%20KEV-live%20scanning-critical.svg" alt="Live CVE + CISA KEV scanning">
   <a href="https://github.com/sponsors/alexgreensh"><img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-ff69b4.svg?labelColor=262626" alt="Sponsor"></a>
 </p>
@@ -105,9 +105,9 @@ The result is a severity-ranked verdict with exit codes designed for CI/CD gatin
 |---------|----------------|----------|
 | **runtime_dynamism** | Dynamic imports, fetch-then-execute, self-modification, time bombs, dynamic tool descriptions | Regex + Python AST, 5 detection categories |
 | **manifest_drift** | Phantom dependencies, runtime installs, conditional import+install, declared-but-unused deps | AST import extraction vs manifest parsing |
-| **skill_threats** | Prompt injection, unicode smuggling, ClickFix delivery, MCP injection, LITL attack padding, known campaign IOCs | 11 detection categories, 160+ regex patterns |
+| **skill_threats** | Prompt injection, unicode smuggling, ClickFix delivery, MCP injection, LITL attack padding, known campaign IOCs, **GlassWorm supplemental variation selectors** (VS17-VS256) | 11 detection categories, 160+ regex patterns |
 | **agent_skills** | SKILL.md frontmatter abuse, tools.json Full-Schema Poisoning, agent config injection (SOUL.md/AGENTS.md/CLAUDE.md), .clawhubignore bypass, ClawHavoc IOCs. Covers Claude Code, OpenClaw, Codex, Cursor, MCP. | Regex + JSON parsing, 5 detection categories |
-| **mcp_security** | SQL → prompt escalation, tool poisoning, tool shadowing, rug pull enablers, config CVEs | Schema field inspection, Invariant Labs TPA patterns |
+| **mcp_security** | SQL → prompt escalation, tool poisoning, tool shadowing, rug pull enablers, config CVEs, **TrustFall .mcp.json RCE** (inline node -e / python -c / fetch+eval) | Schema field inspection, Invariant Labs TPA patterns, JSON structural analysis |
 | **dast** | Hook exploitation: env leaks, timeouts, command injection, path traversal | 8 malicious payloads, sandboxed subprocess execution |
 | **integrity** | Unauthorized config changes, tampered hooks, drift from baseline | SHA256 checksums, `--watch` mode for continuous monitoring |
 | **dataflow** | Source-to-sink taint: env vars and secrets reaching network calls | Forward taint analysis, cross-file import tracking |
@@ -115,13 +115,13 @@ The result is a severity-ranked verdict with exit codes designed for CI/CD gatin
 | **sast** | Dangerous functions, injection, deserialization, shell execution, process.env exposure, path traversal, Model Confusion (HuggingFace), NPM worm propagation, destructive fallback commands | 8 languages: Python, JS, TS, Ruby, PHP, Java, Go, Bash |
 | **ast_analysis** | Obfuscated exec chains, `__reduce__` backdoors, marshal/types bytecode, audit hook abuse | Python AST walking, 12 detection patterns |
 | **dependencies** | Typosquatting, version confusion, SANDWORM_MODE IOC packages, StarJacking detection, transitive supply chain, **known CVEs + CISA KEV auto-enrichment** | 500+ popular packages, l33t normalization, repo-to-package validation, lockfile deep parsing (npm/yarn/poetry/pipfile), OSV API per-package queries, KEV catalog cross-reference |
-| **lifecycle** | Malicious install hooks in npm and pip, `.pth` file injection (liteLLM-style), Command-Jacking (entry point hijacking), Bun runtime stager detection | `postinstall`, `preinstall`, `cmdclass`, `.pth` exec/base64/IOC detection, bin/console_scripts shadow detection |
+| **lifecycle** | Malicious install hooks in npm and pip, `.pth` file injection (liteLLM-style), Command-Jacking, Bun runtime stager, **paste service dead-drops** (pastebin/hastebin/dpaste/gist), **AI agent config injection** (~/.claude/, ~/.cursor/, ~/.continue/) | `postinstall`/`preinstall` analysis, `.pth` detection, paste URL + agent config path patterns |
 | **entropy** | Hidden payloads in base64 blocks, hex strings, high-entropy content | Per-string Shannon entropy with format-aware thresholds |
 | **infra** | Docker misconfig (ENV/ARG secrets, .env COPY), K8s breakouts, GHA expression injection, **known compromised GitHub Actions** (tj-actions, reviewdog, TeamPCP), Claude config CVEs | Dockerfile, YAML, workflow, and settings.json analysis |
 | **devcontainer** | Host secret mounts, privileged mode, docker.sock escape, remoteEnv localEnv interpolation, lifecycle command risks, untrusted features | JSON structure analysis of devcontainer.json |
-| **binary** | Executables disguised as images/text/docs, **audio steganography** (executable payloads in WAV/MP3/FLAC) | Magic number detection, audio data section analysis |
+| **binary** | Executables disguised as images/text/docs, **audio steganography** (executable payloads in WAV/MP3/FLAC), **embedded PE detection** (polyglot files with MZ+PE at non-zero offset) | Magic number detection, audio data section analysis, PE signature validation |
 | **post_incident** | npm cache artifacts, RAT binaries, C2 persistence, install log traces, compromised node_modules | File existence checks, npm cache/log scanning, LaunchAgent grep |
-| **git_forensics** | Timestamp manipulation, identity spoofing, bad GPG signatures | Commit history analysis, multi-identity detection |
+| **git_forensics** | Timestamp manipulation, identity spoofing, bad GPG signatures, **git replace objects** (refs/replace/*), **git grafts** (.git/info/grafts) — history forgery detection no other tool performs | Commit history analysis, git object store forensics |
 
 ---
 

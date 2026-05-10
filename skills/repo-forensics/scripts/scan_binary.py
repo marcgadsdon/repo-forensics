@@ -105,6 +105,63 @@ def scan_audio_steganography(filepath, rel_path):
     return findings
 
 
+def scan_embedded_pe(filepath, rel_path):
+    """Detect PE executables embedded in non-PE files (InQuest Embedded_PE pattern).
+
+    Checks for MZ magic at non-zero offset with valid PE signature.
+    Catches polyglot files (image+PE, document+PE) used in APT campaigns
+    (UNK_CraftyCamel, Proofpoint Sosano).
+    """
+    findings = []
+    ext = os.path.splitext(filepath)[1].lower()
+
+    # Skip actual PE files - MZ at offset 0 is expected there
+    if ext in {'.exe', '.dll', '.sys', '.scr', '.drv', '.ocx', '.com'}:
+        return findings
+
+    try:
+        file_size = os.path.getsize(filepath)
+        if file_size < 64 or file_size > 10 * 1024 * 1024:  # Skip tiny/huge files
+            return findings
+
+        with open(filepath, 'rb') as f:
+            content = f.read(min(file_size, 128 * 1024))
+
+        # Search for MZ at non-zero offsets
+        offset = 1  # Skip offset 0 (would be a normal PE)
+        while offset < len(content) - 64:
+            offset = content.find(b'MZ', offset)
+            if offset < 0:
+                break
+
+            # Validate PE signature at the location indicated by the MZ header
+            try:
+                pe_offset_loc = offset + 0x3C
+                if pe_offset_loc + 4 <= len(content):
+                    pe_offset = int.from_bytes(content[pe_offset_loc:pe_offset_loc + 4], 'little')
+                    pe_sig_loc = offset + pe_offset
+                    if pe_sig_loc + 4 <= len(content):
+                        if content[pe_sig_loc:pe_sig_loc + 4] == b'PE\x00\x00':
+                            findings.append(core.Finding(
+                                scanner=SCANNER_NAME, severity="critical",
+                                title=f"Embedded PE Executable in {ext.upper() or 'file'}",
+                                description=f"PE executable found at offset {offset} inside non-PE file. Polyglot file technique used in APT campaigns (UNK_CraftyCamel, Proofpoint Sosano).",
+                                file=rel_path, line=0,
+                                snippet=f"MZ+PE signature at offset {offset}",
+                                category="embedded-executable"
+                            ))
+                            break  # One finding per file is enough
+            except (IndexError, OverflowError):
+                pass
+
+            offset += 2
+
+    except (OSError, MemoryError):
+        pass
+
+    return findings
+
+
 def main():
     args = core.parse_common_args(sys.argv, "Binary Camouflage Scanner")
     repo_path = args.repo_path
@@ -143,6 +200,9 @@ def main():
         # Audio steganography check
         if ext in AUDIO_EXTENSIONS:
             all_findings.extend(scan_audio_steganography(filepath, rel_path))
+
+        # Embedded PE check (polyglot files: image+PE, document+PE)
+        all_findings.extend(scan_embedded_pe(filepath, rel_path))
 
     core.output_findings(all_findings, args.format, SCANNER_NAME)
 

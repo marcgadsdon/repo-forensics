@@ -44,6 +44,29 @@ SUSPICIOUS_COMMANDS = [
     (re.compile(r'>\s*/dev/null.*2>&1'), "output suppression"),
 ]
 
+# Paste service / dead-drop URLs in install hooks.
+# StegaBin/Shai-Hulud (2025-2026) staged payloads on public paste services to evade
+# static analysis; buildrunner-dev (Feb 2026) used image hosting for RGB steganography.
+PASTE_SERVICE_PATTERNS = [
+    (re.compile(r'(?i)\b(pastebin\.com|hastebin\.com|dpaste\.(org|com)|paste\.ee|ghostbin\.co|rentry\.co|ix\.io|sprunge\.us)\b'), "Paste service URL (dead-drop C2 staging pattern, StegaBin/Shai-Hulud 2025-2026)"),
+    (re.compile(r'(?i)\braw\.githubusercontent\.com/[^/]+/[^/]+/(main|master)/'), "Raw GitHub file fetch (potential dead-drop payload source)"),
+    (re.compile(r'(?i)\bgist\.githubusercontent\.com\b'), "GitHub Gist fetch (potential dead-drop payload)"),
+    (re.compile(r'(?i)\b(webhook\.site|requestbin\.com|pipedream\.net)\b'), "Webhook/request-bin service (data exfiltration endpoint)"),
+    (re.compile(r'(?i)\b(i\.ibb\.co|imgbb\.com|cloudinary\.com/[^/]+/image)\b'), "Image hosting service in install context (RGB pixel steganography vector, buildrunner-dev Feb 2026)"),
+]
+
+# Agent config directory write patterns.
+# Malicious packages that write to AI agent config dirs persist across uninstall
+# because ~/.claude/, ~/.cursor/, etc. are not cleaned up with npm/pip uninstall.
+AGENT_CONFIG_DIR_PATTERNS = [
+    (re.compile(r'(?i)(~|\$HOME|\$\{HOME\})/\.claude(/|["\'])'), "Write to ~/.claude/ (Claude Code config injection, persists after uninstall)"),
+    (re.compile(r'(?i)(~|\$HOME|\$\{HOME\})/\.cursor(/|["\'])'), "Write to ~/.cursor/ (Cursor config injection)"),
+    (re.compile(r'(?i)(~|\$HOME|\$\{HOME\})/\.continue(/|["\'])'), "Write to ~/.continue/ (Continue config injection)"),
+    (re.compile(r'(?i)(~|\$HOME|\$\{HOME\})/\.windsurf(/|["\'])'), "Write to ~/.windsurf/ (Windsurf config injection)"),
+    (re.compile(r'(?i)(~|\$HOME|\$\{HOME\})/\.codeium(/|["\'])'), "Write to ~/.codeium/ (Codeium config injection)"),
+    (re.compile(r'(?i)mkdir\s+.*\.(claude|cursor|continue|windsurf)/'), "Directory creation in AI agent config path"),
+]
+
 # Anti-forensics patterns: self-destructing installers (Axios supply chain, March 2026)
 ANTI_FORENSICS_PATTERNS = [
     (re.compile(r'(?i)\brm\s+([-rf\s]*)(setup\.js|install\.js|postinstall\.js|preinstall\.js)'), "Self-deleting installer script"),
@@ -109,6 +132,32 @@ def scan_package_json(file_path, rel_path):
                             snippet=f"{hook}: {cmd[:120]}",
                             category="lifecycle-hook"
                         ))
+
+                # Check for paste service / dead-drop URLs
+                for pattern, desc in PASTE_SERVICE_PATTERNS:
+                    if pattern.search(cmd):
+                        findings.append(core.Finding(
+                            scanner=SCANNER_NAME, severity="critical",
+                            title=f"NPM Hook: Paste Service URL in '{hook}'",
+                            description=f"Lifecycle hook references {desc}",
+                            file=rel_path, line=0,
+                            snippet=f"{hook}: {cmd[:120]}",
+                            category="lifecycle-hook"
+                        ))
+                        break
+
+                # Check for agent config directory writes
+                for pattern, desc in AGENT_CONFIG_DIR_PATTERNS:
+                    if pattern.search(cmd):
+                        findings.append(core.Finding(
+                            scanner=SCANNER_NAME, severity="critical",
+                            title=f"NPM Hook: Agent Config Dir Write in '{hook}'",
+                            description=f"Lifecycle hook writes to AI agent config directory: {desc}",
+                            file=rel_path, line=0,
+                            snippet=f"{hook}: {cmd[:120]}",
+                            category="lifecycle-hook"
+                        ))
+                        break
 
                 # Check for anti-forensics patterns
                 for pattern, desc in ANTI_FORENSICS_PATTERNS:

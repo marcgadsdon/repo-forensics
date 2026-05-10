@@ -91,6 +91,13 @@ VARIATION_SELECTORS = set(
     [chr(cp) for cp in range(0xFE00, 0xFE10)]  # VS1-VS16
 )
 
+# Supplemental variation selectors VS17-VS256 (U+E0100-U+E01EF).
+# GlassWorm campaign (Oct 2025-Mar 2026) weaponized this range to hide executable
+# JavaScript in 433 VS Code extensions. No legitimate use in source code.
+SUPPLEMENTAL_VARIATION_SELECTORS = set(
+    [chr(cp) for cp in range(0xE0100, 0xE01F0)]  # VS17-VS256
+)
+
 # Confusable space characters (Glassworm attack vector).
 CONFUSABLE_SPACES = set([
     '\u00a0',  # NO-BREAK SPACE (most common Glassworm vector)
@@ -124,10 +131,12 @@ ANNOTATION_CHARS = set([
 
 # Combined pattern for all invisible/smuggling characters (fast boolean check).
 _ALL_INVISIBLE = (ZERO_WIDTH_CHARS | BIDI_CONTROL_CHARS | CONFUSABLE_SPACES
-                  | ANNOTATION_CHARS | VARIATION_SELECTORS | TAG_CHARS)
+                  | ANNOTATION_CHARS | VARIATION_SELECTORS | SUPPLEMENTAL_VARIATION_SELECTORS
+                  | TAG_CHARS)
 ZERO_WIDTH_PATTERN = re.compile('[' + re.escape(''.join(_ALL_INVISIBLE)) + ']')
 BIDI_PATTERN = re.compile('[' + re.escape(''.join(BIDI_CONTROL_CHARS)) + ']')
 VARIATION_SELECTOR_PATTERN = re.compile('[' + re.escape(''.join(VARIATION_SELECTORS)) + ']')
+SUPPLEMENTAL_VS_PATTERN = re.compile('[' + re.escape(''.join(SUPPLEMENTAL_VARIATION_SELECTORS)) + ']')
 TAG_CHAR_PATTERN = re.compile('[' + re.escape(''.join(TAG_CHARS)) + ']')
 CONFUSABLE_SPACE_PATTERN = re.compile('[' + re.escape(''.join(CONFUSABLE_SPACES)) + ']')
 # C1 controls (0x80-0x9F) + C0 non-whitespace (0x00-0x08, 0x0B, 0x0E-0x1F, 0x7F)
@@ -452,6 +461,20 @@ def scan_unicode_smuggling(content, rel_path):
             description=f"Variation selector U+{cp:04X} alters character appearance without changing semantics",
             file=rel_path, line=line_no,
             snippet=f"Contains U+{cp:04X} variation selector",
+            category="unicode-smuggling"
+        ))
+
+    # Supplemental variation selectors (VS17-VS256, GlassWorm campaign range)
+    m = SUPPLEMENTAL_VS_PATTERN.search(content)
+    if m:
+        cp = ord(m.group(0))
+        line_no = content[:m.start()].count('\n') + 1
+        findings.append(core.Finding(
+            scanner=SCANNER_NAME, severity="critical",
+            title="GlassWorm: Supplemental Variation Selector",
+            description=f"Supplemental variation selector U+{cp:05X} (VS17-VS256 range). This range was weaponized in the GlassWorm campaign (Oct 2025-Mar 2026) to hide executable JavaScript in 433 VS Code extensions.",
+            file=rel_path, line=line_no,
+            snippet=f"Contains U+{cp:05X} supplemental variation selector",
             category="unicode-smuggling"
         ))
 
