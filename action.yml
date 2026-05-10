@@ -85,7 +85,6 @@ runs:
         set -e
 
         echo "exit-code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-        echo "::set-output name=exit-code::$EXIT_CODE"
 
         if [ "$EXIT_CODE" -eq 2 ]; then
           echo "::error::Repo Forensics found CRITICAL findings"
