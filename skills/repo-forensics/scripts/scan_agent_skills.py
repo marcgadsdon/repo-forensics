@@ -402,17 +402,22 @@ def scan_reference_chains(repo_path):
     for seed in _SEED_FILES:
         if seed not in graph:
             continue
-        _find_chains(seed, graph, [], findings, repo_path)
+        visited_edges = set()
+        _find_chains(seed, graph, [], findings, repo_path, visited_edges)
 
     return findings
 
 
-def _find_chains(current, graph, path, findings, repo_path):
+def _find_chains(current, graph, path, findings, repo_path, visited_edges):
     if len(path) >= _MAX_CHAIN_DEPTH:
         return
     for ref in graph.get(current, []):
         if ref in path:
             continue
+        edge = (current, ref)
+        if edge in visited_edges:
+            continue
+        visited_edges.add(edge)
         new_path = path + [current]
         chain_depth = len(new_path)
         if chain_depth >= 2:
@@ -424,7 +429,7 @@ def _find_chains(current, graph, path, findings, repo_path):
                 f"Chain: {chain_str}. Transitive references create a trust-laundering pipeline (Terra Security OpenClaw, May 2026).",
                 new_path[0], 0, chain_str[:120], "reference-chain"))
         if ref in graph:
-            _find_chains(ref, graph, new_path, findings, repo_path)
+            _find_chains(ref, graph, new_path, findings, repo_path, visited_edges)
 
 
 # ============================================================

@@ -10,8 +10,10 @@ import sys
 import os
 import json
 import difflib
+import math
 import re
 import unicodedata
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -384,6 +386,20 @@ _VULN_STATE = {
     "queried": set(),     # dedup tuples (ecosystem, name_lower, normalized_version)
 }
 
+# --- Freshness detection state -----------------------------------------------
+#
+# Parallel to _VULN_STATE. For every (ecosystem, package, version) seen in a
+# manifest, query the registry for publication metadata (publish date,
+# version count, maintainer identity). Flag very-new versions, brand-new
+# packages, and maintainer changes -- all key supply-chain attack indicators.
+_FRESHNESS_STATE = {
+    "enabled": True,       # --skip-freshness disables
+    "offline": False,      # --offline disables
+    "queried": set(),      # dedup (ecosystem, name_lower, version)
+    "query_count": 0,      # hard cap tracking
+    "max_queries": 100,    # hard cap
+}
+
 
 def _check_vulns(ecosystem, pkg_versions, rel_path):
     """Enrich findings with OSV + CISA KEV data for each (pkg, version) seen.
@@ -455,6 +471,159 @@ def _check_vulns(ecosystem, pkg_versions, rel_path):
                 snippet=f"{safe_pkg}@{normalized} matches {v.get('id')}",
                 category="cve-kev" if v.get("in_kev") else "cve",
             ))
+    return findings
+
+
+def _check_freshness(ecosystem, pkg_versions, rel_path):
+    """Enrich findings with publication-age and maintainer-change signals.
+
+    Design mirrors _check_vulns:
+      - Pure: no mutation of caller state beyond returning findings.
+      - Offline-safe: disabled/offline -> [].
+      - Deduped: each (eco, name, version) triple checked at most once.
+      - Popular packages skipped (POPULAR_NPM / POPULAR_PYPI).
+      - Hard query cap prevents runaway network usage on huge monorepos.
+    """
+    if not _FRESHNESS_STATE["enabled"] or _FRESHNESS_STATE["offline"]:
+        return []
+    try:
+        import vuln_feed
+    except ImportError:
+        return []
+
+    # Dispatch to the right registry fetcher
+    _FETCH = {
+        "npm": vuln_feed.fetch_npm_freshness,
+        "PyPI": vuln_feed.fetch_pypi_freshness,
+    }
+    fetcher = _FETCH.get(ecosystem)
+    if fetcher is None:
+        return []
+
+    # Pick the popular-package skip list for this ecosystem
+    popular = POPULAR_NPM if ecosystem == "npm" else POPULAR_PYPI
+
+    findings = []
+    skipped_count = 0
+
+    for pkg, version in pkg_versions.items():
+        if not isinstance(pkg, str) or not isinstance(version, str):
+            continue
+        normalized = normalize_version(version)
+        if normalized is None:
+            continue
+        canonical = vuln_feed.canonicalize_pkg_name(ecosystem, pkg)
+        key = (ecosystem, canonical, normalized)
+        if key in _FRESHNESS_STATE["queried"]:
+            continue
+        _FRESHNESS_STATE["queried"].add(key)
+
+        # Skip well-known popular packages (low signal, high network cost)
+        if canonical.lower() in {p.lower() for p in popular}:
+            continue
+
+        # Enforce hard query cap
+        if _FRESHNESS_STATE["query_count"] >= _FRESHNESS_STATE["max_queries"]:
+            skipped_count += 1
+            continue
+        _FRESHNESS_STATE["query_count"] += 1
+
+        try:
+            result = fetcher(canonical, normalized,
+                             offline=_FRESHNESS_STATE["offline"])
+        except (OSError, ValueError, RuntimeError) as e:
+            print(f"[!] Freshness check error for {canonical}@{normalized}: {e}",
+                  file=sys.stderr)
+            continue
+
+        if result is None:
+            continue
+
+        published_str = result.get("published")
+        if not published_str:
+            continue
+
+        try:
+            publish_dt = datetime.fromisoformat(
+                published_str.replace("Z", "+00:00")
+            )
+        except (ValueError, TypeError):
+            continue
+
+        age = datetime.now(timezone.utc) - publish_dt
+        version_count = result.get("version_count", 0)
+
+        # Signal 1: Very new (< 24 hours)
+        if age.total_seconds() < 86400:
+            findings.append(core.Finding(
+                scanner=SCANNER_NAME, severity="high",
+                title=f"Very new package version: {pkg}@{version}",
+                description=(
+                    f"Published {age.total_seconds()/3600:.0f}h ago. "
+                    f"Malicious packages are often published and consumed within hours."
+                ),
+                file=rel_path, line=0,
+                snippet=f"{pkg}@{version} published {result['published']}",
+                category="freshness-very-new",
+            ))
+        # Signal 2: Recent (< 7 days)
+        elif age.days < 7:
+            findings.append(core.Finding(
+                scanner=SCANNER_NAME, severity="medium",
+                title=f"Recently published package version: {pkg}@{version}",
+                description=(
+                    f"Published {age.days}d ago. "
+                    f"Consider waiting before adopting new versions."
+                ),
+                file=rel_path, line=0,
+                snippet=f"{pkg}@{version} published {result['published']}",
+                category="freshness-recent",
+            ))
+
+        # Signal 3: Brand new single-version package (< 30 days)
+        if version_count == 1 and age.days < 30:
+            findings.append(core.Finding(
+                scanner=SCANNER_NAME, severity="high",
+                title=f"Brand new package with single version: {pkg}@{version}",
+                description=(
+                    f"First-ever version published {age.days}d ago. "
+                    f"Brand new packages with no history are higher risk."
+                ),
+                file=rel_path, line=0,
+                snippet=f"{pkg}@{version} (1 version, published {result['published']})",
+                category="freshness-brand-new-package",
+            ))
+
+        # Signal 4: Maintainer changed
+        prev = result.get("prev_maintainer")
+        curr = result.get("maintainer")
+        if prev and curr and curr != prev:
+            findings.append(core.Finding(
+                scanner=SCANNER_NAME, severity="high",
+                title=f"Maintainer changed: {pkg}@{version}",
+                description=(
+                    f"Publishing author changed from '{prev}' to '{curr}'. "
+                    f"Maintainer takeover is a common supply chain attack vector."
+                ),
+                file=rel_path, line=0,
+                snippet=f"{pkg}@{version}: {prev} -> {curr}",
+                category="freshness-maintainer-takeover",
+            ))
+
+    # Emit cap-hit finding if any packages were skipped
+    if skipped_count > 0:
+        findings.append(core.Finding(
+            scanner=SCANNER_NAME, severity="medium",
+            title="Freshness check query limit reached",
+            description=(
+                f"{skipped_count} packages skipped due to "
+                f"{_FRESHNESS_STATE['max_queries']} query limit."
+            ),
+            file=rel_path, line=0,
+            snippet=f"Query cap: {_FRESHNESS_STATE['max_queries']}",
+            category="freshness-query-cap",
+        ))
+
     return findings
 
 
@@ -666,6 +835,7 @@ def scan_package_json(filepath, rel_path):
                 f.category = "supply-chain-override"
             findings.extend(override_findings)
             findings.extend(_check_vulns("npm", override_deps, rel_path))
+            findings.extend(_check_freshness("npm", override_deps, rel_path))
 
         # Flag .pnpmfile.cjs as an install-time rewriting vector (advisory only)
         pkg_dir = os.path.dirname(filepath)
@@ -770,6 +940,7 @@ def scan_package_json(filepath, rel_path):
         # their values are already resolved. (CRC-F1, 2026-04-05.)
         findings.extend(check_compromised_versions(all_deps, rel_path, strict_pin=True))
         findings.extend(_check_vulns("npm", all_deps, rel_path))
+        findings.extend(_check_freshness("npm", all_deps, rel_path))
 
         # Suspicious npm scopes (forking campaigns)
         findings.extend(check_suspicious_scopes(dep_names, rel_path))
@@ -921,6 +1092,7 @@ def scan_python_deps(filepath, rel_path):
         # Vuln enrichment on pinned versions only (ranges can't be queried)
         if pinned_pkg_versions:
             findings.extend(_check_vulns("PyPI", pinned_pkg_versions, rel_path))
+            findings.extend(_check_freshness("PyPI", pinned_pkg_versions, rel_path))
 
         typos = check_typosquatting(deps, POPULAR_PYPI)
         for suspect, target, score in typos:
@@ -1069,6 +1241,7 @@ def parse_package_lock_json(filepath, rel_path):
             if pkg_versions:
                 findings.extend(check_compromised_versions(pkg_versions, rel_path))
                 findings.extend(_check_vulns("npm", pkg_versions, rel_path))
+                findings.extend(_check_freshness("npm", pkg_versions, rel_path))
 
             # Typosquatting check on transitive deps too
             typos = check_typosquatting(list(all_packages), POPULAR_NPM)
@@ -1174,6 +1347,7 @@ def parse_yarn_lock(filepath, rel_path):
             if pkg_versions:
                 findings.extend(check_compromised_versions(pkg_versions, rel_path))
                 findings.extend(_check_vulns("npm", pkg_versions, rel_path))
+                findings.extend(_check_freshness("npm", pkg_versions, rel_path))
 
             typos = check_typosquatting(list(all_packages), POPULAR_NPM)
             for suspect, target, score in typos:
@@ -1219,6 +1393,7 @@ def parse_poetry_lock(filepath, rel_path):
             if pkg_versions:
                 findings.extend(check_compromised_versions(pkg_versions, rel_path))
                 findings.extend(_check_vulns("PyPI", pkg_versions, rel_path))
+                findings.extend(_check_freshness("PyPI", pkg_versions, rel_path))
 
             typos = check_typosquatting(list(all_packages), POPULAR_PYPI)
             for suspect, target, score in typos:
@@ -1263,6 +1438,7 @@ def parse_pnpm_lock_file(filepath, rel_path):
     findings.extend(check_suspicious_scopes(list(deps.keys()), rel_path))
     findings.extend(check_compromised_versions(deps, rel_path))
     findings.extend(_check_vulns("npm", deps, rel_path))
+    findings.extend(_check_freshness("npm", deps, rel_path))
 
     # Typosquatting on the package names
     typos = check_typosquatting(list(deps.keys()), POPULAR_NPM)
@@ -1300,6 +1476,7 @@ def parse_pipfile_lock(filepath, rel_path):
             if pkg_versions:
                 findings.extend(check_compromised_versions(pkg_versions, rel_path))
                 findings.extend(_check_vulns("PyPI", pkg_versions, rel_path))
+                findings.extend(_check_freshness("PyPI", pkg_versions, rel_path))
             findings.extend(check_known_ioc_packages(list(all_packages), rel_path))
             typos = check_typosquatting(list(all_packages), POPULAR_PYPI)
             for suspect, target, score in typos:
@@ -1539,9 +1716,6 @@ def _merge_user_package_list_into_db(path, repo_path):
 # Detects package.json inconsistencies that indicate manifest confusion:
 # the attack where npm metadata differs from tarball content.
 # ============================================================
-
-import math
-
 
 def _compute_entropy(data):
     """Compute Shannon entropy of a byte string or text string."""
@@ -1914,12 +2088,19 @@ def main():
                               "OSV data if present. Implies no live updates."))
     parser.add_argument('--update-vulns', action='store_true',
                         help="Refresh CISA KEV cache before scanning")
+    parser.add_argument('--skip-freshness', action='store_true',
+                        help="Skip package freshness checks (publication age, maintainer changes)")
     args = parser.parse_args()
 
     _VULN_STATE["queried"] = set()
     _VULN_STATE["kev"] = None
     _VULN_STATE["enabled"] = not args.no_vulns
     _VULN_STATE["offline"] = bool(args.offline)
+
+    _FRESHNESS_STATE["enabled"] = not args.skip_freshness and not args.no_vulns
+    _FRESHNESS_STATE["offline"] = bool(args.offline)
+    _FRESHNESS_STATE["queried"] = set()
+    _FRESHNESS_STATE["query_count"] = 0
     if args.update_vulns and not args.offline:
         try:
             import vuln_feed

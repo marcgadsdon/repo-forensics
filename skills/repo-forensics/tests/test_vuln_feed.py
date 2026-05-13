@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import unittest.mock
 import urllib.error
 
 import pytest
@@ -597,3 +598,192 @@ def test_osv_degraded_expires(monkeypatch):
     vuln_feed._OSV_DEGRADED["npm"] = time.time() - (vuln_feed._OSV_DEGRADED_TTL_SEC + 1)
     assert vuln_feed._osv_is_degraded("npm") is False
     vuln_feed._OSV_DEGRADED.clear()
+
+
+# ======================================================================
+# Freshness API (npm + PyPI)
+# ======================================================================
+
+# Minimal npm registry response with two versions so we can test
+# prev_maintainer lookup.
+_NPM_SAMPLE = {
+    "name": "mylib",
+    "time": {
+        "created":  "2020-01-01T00:00:00.000Z",
+        "modified": "2022-06-01T00:00:00.000Z",
+        "1.0.0":    "2021-01-01T00:00:00.000Z",
+        "2.0.0":    "2022-01-01T00:00:00.000Z",
+    },
+    "versions": {
+        "1.0.0": {
+            "_npmUser": {"name": "alice"},
+        },
+        "2.0.0": {
+            "_npmUser": {"name": "bob"},
+        },
+    },
+}
+
+_PYPI_SAMPLE = {
+    "info": {
+        "name": "mylib",
+        "author": "alice",
+    },
+    "releases": {
+        "1.0.0": [
+            {
+                "upload_time_iso_8601": "2021-01-01T00:00:00.000000Z",
+                "upload_time": "2021-01-01T00:00:00",
+            }
+        ],
+        "2.0.0": [
+            {
+                "upload_time_iso_8601": "2022-01-01T00:00:00.000000Z",
+                "upload_time": "2022-01-01T00:00:00",
+            }
+        ],
+    },
+}
+
+
+class TestFreshnessAPI:
+
+    def test_npm_cache_hit(self, tmp_path):
+        """Pre-seeded fresh cache must be returned without any HTTP call."""
+        cache_data = {
+            "published": "2022-01-01T00:00:00.000Z",
+            "version_count": 2,
+            "maintainer": "bob",
+            "prev_maintainer": "alice",
+            "_cached_at": time.time(),
+        }
+        cache_path = vuln_feed._freshness_cache_path(
+            str(tmp_path), "npm", "mylib", "2.0.0"
+        )
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as fh:
+            json.dump(cache_data, fh)
+
+        with unittest.mock.patch.object(vuln_feed, "_https_fetch") as mock_fetch:
+            result = vuln_feed.fetch_npm_freshness(
+                "mylib", "2.0.0", cache_dir=str(tmp_path)
+            )
+            mock_fetch.assert_not_called()
+
+        assert result is not None
+        assert result["published"] == "2022-01-01T00:00:00.000Z"
+        assert result["maintainer"] == "bob"
+        assert result["prev_maintainer"] == "alice"
+
+    def test_npm_cache_miss(self, tmp_path):
+        """Cache miss triggers HTTP fetch; result written to cache and returned."""
+        raw = json.dumps(_NPM_SAMPLE).encode("utf-8")
+
+        with unittest.mock.patch.object(
+            vuln_feed, "_https_fetch", return_value=raw
+        ) as mock_fetch:
+            result = vuln_feed.fetch_npm_freshness(
+                "mylib", "2.0.0", cache_dir=str(tmp_path)
+            )
+            mock_fetch.assert_called_once()
+
+        assert result is not None
+        assert result["published"] == "2022-01-01T00:00:00.000Z"
+        assert result["version_count"] == 2
+        assert result["maintainer"] == "bob"
+        assert result["prev_maintainer"] == "alice"
+
+        # Verify cache was written
+        cache_path = vuln_feed._freshness_cache_path(
+            str(tmp_path), "npm", "mylib", "2.0.0"
+        )
+        assert os.path.exists(cache_path)
+        with open(cache_path, "r", encoding="utf-8") as fh:
+            on_disk = json.load(fh)
+        assert on_disk["published"] == "2022-01-01T00:00:00.000Z"
+        assert "_cached_at" in on_disk
+
+    def test_pypi_cache_miss(self, tmp_path):
+        """PyPI cache miss fetches correctly and writes cache."""
+        raw = json.dumps(_PYPI_SAMPLE).encode("utf-8")
+
+        with unittest.mock.patch.object(
+            vuln_feed, "_https_fetch", return_value=raw
+        ) as mock_fetch:
+            result = vuln_feed.fetch_pypi_freshness(
+                "mylib", "2.0.0", cache_dir=str(tmp_path)
+            )
+            mock_fetch.assert_called_once()
+
+        assert result is not None
+        assert result["published"] == "2022-01-01T00:00:00.000000Z"
+        assert result["version_count"] == 2
+        assert result["maintainer"] == "alice"
+
+        cache_path = vuln_feed._freshness_cache_path(
+            str(tmp_path), "pypi", "mylib", "2.0.0"
+        )
+        assert os.path.exists(cache_path)
+
+    def test_malformed_response(self, tmp_path):
+        """Empty JSON object must not crash; returns None."""
+        with unittest.mock.patch.object(
+            vuln_feed, "_https_fetch", return_value=b"{}"
+        ):
+            npm_result = vuln_feed.fetch_npm_freshness(
+                "mylib", "1.0.0", cache_dir=str(tmp_path)
+            )
+            pypi_result = vuln_feed.fetch_pypi_freshness(
+                "mylib", "1.0.0", cache_dir=str(tmp_path)
+            )
+
+        # Empty JSON is valid but has no useful data; must return a result
+        # dict with None/0 fields, NOT crash.  Either None or a zero-filled
+        # dict is acceptable (the function returns None when it can't parse,
+        # or a partial dict).  We just assert no exception and no crash.
+        assert npm_result is None or isinstance(npm_result, dict)
+        assert pypi_result is None or isinstance(pypi_result, dict)
+
+    def test_offline_mode(self, tmp_path):
+        """offline=True with no cache must return None without HTTP call."""
+        with unittest.mock.patch.object(vuln_feed, "_https_fetch") as mock_fetch:
+            npm_result = vuln_feed.fetch_npm_freshness(
+                "mylib", "1.0.0", cache_dir=str(tmp_path), offline=True
+            )
+            pypi_result = vuln_feed.fetch_pypi_freshness(
+                "mylib", "1.0.0", cache_dir=str(tmp_path), offline=True
+            )
+            mock_fetch.assert_not_called()
+
+        assert npm_result is None
+        assert pypi_result is None
+
+    def test_timeout(self, tmp_path):
+        """URLError from _https_fetch must be caught; returns None."""
+        def _boom(*_a, **_kw):
+            raise urllib.error.URLError("timeout")
+
+        with unittest.mock.patch.object(vuln_feed, "_https_fetch", side_effect=_boom):
+            npm_result = vuln_feed.fetch_npm_freshness(
+                "mylib", "1.0.0", cache_dir=str(tmp_path)
+            )
+            pypi_result = vuln_feed.fetch_pypi_freshness(
+                "mylib", "1.0.0", cache_dir=str(tmp_path)
+            )
+
+        assert npm_result is None
+        assert pypi_result is None
+
+    def test_invalid_package_name(self, tmp_path):
+        """Path-traversal package name must be rejected without HTTP call."""
+        with unittest.mock.patch.object(vuln_feed, "_https_fetch") as mock_fetch:
+            npm_result = vuln_feed.fetch_npm_freshness(
+                "../../etc/passwd", "1.0.0", cache_dir=str(tmp_path)
+            )
+            pypi_result = vuln_feed.fetch_pypi_freshness(
+                "../../etc/passwd", "1.0.0", cache_dir=str(tmp_path)
+            )
+            mock_fetch.assert_not_called()
+
+        assert npm_result is None
+        assert pypi_result is None

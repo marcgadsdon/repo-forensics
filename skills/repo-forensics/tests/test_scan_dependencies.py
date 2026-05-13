@@ -535,3 +535,264 @@ class TestTanStackSetupIOC:
         findings = scanner.scan_package_json(str(pkg), "package.json")
         ioc_findings = [f for f in findings if f.category == "known-ioc"]
         assert len(ioc_findings) >= 1
+
+
+class TestFreshnessDetection:
+    """Tests for _check_freshness publication-age and maintainer-change signals."""
+
+    def _reset_freshness_state(self):
+        """Reset _FRESHNESS_STATE to a clean enabled configuration."""
+        scanner._FRESHNESS_STATE["enabled"] = True
+        scanner._FRESHNESS_STATE["offline"] = False
+        scanner._FRESHNESS_STATE["queried"] = set()
+        scanner._FRESHNESS_STATE["query_count"] = 0
+        scanner._FRESHNESS_STATE["max_queries"] = 100
+
+    def test_signal_very_new(self):
+        """Package published 12 hours ago -> high severity freshness-very-new."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        self._reset_freshness_state()
+        now = datetime.now(timezone.utc)
+        published = (now - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_result = {
+            "published": published,
+            "version_count": 5,
+            "maintainer": "alice",
+            "prev_maintainer": "alice",
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result):
+            findings = scanner._check_freshness(
+                "npm", {"my-new-pkg": "1.0.0"}, "package.json"
+            )
+
+        cats = [f.category for f in findings]
+        assert "freshness-very-new" in cats
+        assert any(f.severity == "high" for f in findings if f.category == "freshness-very-new")
+
+    def test_signal_recent(self):
+        """Package published 3 days ago -> medium severity freshness-recent."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        self._reset_freshness_state()
+        now = datetime.now(timezone.utc)
+        published = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_result = {
+            "published": published,
+            "version_count": 10,
+            "maintainer": "bob",
+            "prev_maintainer": "bob",
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result):
+            findings = scanner._check_freshness(
+                "npm", {"some-pkg": "2.0.0"}, "package.json"
+            )
+
+        cats = [f.category for f in findings]
+        assert "freshness-recent" in cats
+        assert any(f.severity == "medium" for f in findings if f.category == "freshness-recent")
+
+    def test_signal_not_recent(self):
+        """Package published 10 days ago -> no age-based freshness finding."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        self._reset_freshness_state()
+        now = datetime.now(timezone.utc)
+        published = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_result = {
+            "published": published,
+            "version_count": 20,
+            "maintainer": "carol",
+            "prev_maintainer": "carol",
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result):
+            findings = scanner._check_freshness(
+                "npm", {"old-pkg": "3.0.0"}, "package.json"
+            )
+
+        cats = [f.category for f in findings]
+        assert "freshness-very-new" not in cats
+        assert "freshness-recent" not in cats
+
+    def test_signal_brand_new(self):
+        """version_count=1, published 15 days ago -> high freshness-brand-new-package."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        self._reset_freshness_state()
+        now = datetime.now(timezone.utc)
+        published = (now - timedelta(days=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_result = {
+            "published": published,
+            "version_count": 1,
+            "maintainer": "dave",
+            "prev_maintainer": None,
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result):
+            findings = scanner._check_freshness(
+                "npm", {"brand-new-pkg": "0.1.0"}, "package.json"
+            )
+
+        cats = [f.category for f in findings]
+        assert "freshness-brand-new-package" in cats
+        assert any(f.severity == "high" for f in findings if f.category == "freshness-brand-new-package")
+
+    def test_signal_not_brand_new(self):
+        """version_count=50, published 2 days ago -> NOT brand-new-package (but may be recent)."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        self._reset_freshness_state()
+        now = datetime.now(timezone.utc)
+        published = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_result = {
+            "published": published,
+            "version_count": 50,
+            "maintainer": "eve",
+            "prev_maintainer": "eve",
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result):
+            findings = scanner._check_freshness(
+                "npm", {"mature-pkg": "50.0.0"}, "package.json"
+            )
+
+        cats = [f.category for f in findings]
+        assert "freshness-brand-new-package" not in cats
+        # But freshness-recent IS expected (2 days < 7 days)
+        assert "freshness-recent" in cats
+
+    def test_signal_maintainer_takeover(self):
+        """Maintainer changed -> high freshness-maintainer-takeover."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        self._reset_freshness_state()
+        now = datetime.now(timezone.utc)
+        published = (now - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_result = {
+            "published": published,
+            "version_count": 30,
+            "maintainer": "mallory",
+            "prev_maintainer": "alice",
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result):
+            findings = scanner._check_freshness(
+                "npm", {"hijacked-pkg": "4.0.0"}, "package.json"
+            )
+
+        cats = [f.category for f in findings]
+        assert "freshness-maintainer-takeover" in cats
+        assert any(f.severity == "high" for f in findings if f.category == "freshness-maintainer-takeover")
+
+    def test_signal_same_maintainer(self):
+        """Same maintainer -> no takeover finding."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        self._reset_freshness_state()
+        now = datetime.now(timezone.utc)
+        published = (now - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_result = {
+            "published": published,
+            "version_count": 30,
+            "maintainer": "alice",
+            "prev_maintainer": "alice",
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result):
+            findings = scanner._check_freshness(
+                "npm", {"safe-pkg": "5.0.0"}, "package.json"
+            )
+
+        cats = [f.category for f in findings]
+        assert "freshness-maintainer-takeover" not in cats
+
+    def test_popular_package_skip(self):
+        """Popular packages (react) should NOT trigger freshness checks."""
+        from unittest.mock import patch
+
+        self._reset_freshness_state()
+
+        mock_result = {
+            "published": "2026-05-13T00:00:00Z",
+            "version_count": 1,
+            "maintainer": "mallory",
+            "prev_maintainer": "facebook",
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result) as mock_fetch:
+            findings = scanner._check_freshness(
+                "npm", {"react": "19.0.0"}, "package.json"
+            )
+
+        # fetch should never be called for a popular package
+        mock_fetch.assert_not_called()
+        assert len(findings) == 0
+
+    def test_query_cap(self):
+        """150 packages with cap 100 -> finding about 50 skipped."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+
+        self._reset_freshness_state()
+        scanner._FRESHNESS_STATE["max_queries"] = 100
+
+        now = datetime.now(timezone.utc)
+        published = (now - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_result = {
+            "published": published,
+            "version_count": 30,
+            "maintainer": "alice",
+            "prev_maintainer": "alice",
+        }
+
+        # Build 150 unique package names (not in POPULAR_NPM)
+        pkg_versions = {f"obscure-pkg-{i}": "1.0.0" for i in range(150)}
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result):
+            findings = scanner._check_freshness(
+                "npm", pkg_versions, "package.json"
+            )
+
+        cap_findings = [f for f in findings if f.category == "freshness-query-cap"]
+        assert len(cap_findings) == 1
+        assert "50 packages skipped" in cap_findings[0].description
+
+    def test_skip_freshness_flag(self):
+        """_FRESHNESS_STATE['enabled'] = False -> no findings at all."""
+        from unittest.mock import patch
+
+        self._reset_freshness_state()
+        scanner._FRESHNESS_STATE["enabled"] = False
+
+        mock_result = {
+            "published": "2026-05-13T00:00:00Z",
+            "version_count": 1,
+            "maintainer": "mallory",
+            "prev_maintainer": "alice",
+        }
+
+        with patch("vuln_feed.fetch_npm_freshness", return_value=mock_result) as mock_fetch:
+            findings = scanner._check_freshness(
+                "npm", {"evil-pkg": "1.0.0"}, "package.json"
+            )
+
+        mock_fetch.assert_not_called()
+        assert len(findings) == 0

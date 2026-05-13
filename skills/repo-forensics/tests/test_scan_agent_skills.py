@@ -528,3 +528,54 @@ class TestExpandedPatternLists:
         findings = scanner.main(str(tmp_path))
         config_writes = [f for f in findings if "config write request" in f.title.lower()]
         assert len(config_writes) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Cat 8 edge cases: visited_edges bounding (diamond graph, linear chain)
+# ---------------------------------------------------------------------------
+
+class TestReferenceChainsBounding:
+    def test_diamond_graph_bounded(self, tmp_path):
+        """Diamond graph: SKILL.md -> A.md, SKILL.md -> B.md, A.md -> SHARED.md,
+        B.md -> SHARED.md. The shared edge A->SHARED and B->SHARED each appear
+        once; findings should be bounded (not exponential)."""
+        _write(tmp_path, "SKILL.md",
+               "---\nname: test\nauthor: a\n---\nread A.md and read B.md\n")
+        _write(tmp_path, "A.md", "read SHARED.md\n")
+        _write(tmp_path, "B.md", "read SHARED.md\n")
+        _write(tmp_path, "SHARED.md", "shared payload content\n")
+        findings = scanner.main(str(tmp_path))
+        chain_findings = [f for f in findings if "reference chain" in f.title.lower()]
+        # Both SKILL->A->SHARED and SKILL->B->SHARED chains should fire (depth 2 each)
+        assert len(chain_findings) >= 2, (
+            f"Expected at least 2 chain findings for diamond graph, got {len(chain_findings)}: "
+            f"{[f.snippet for f in chain_findings]}"
+        )
+        # But the SHARED->... edge must not be traversed more times than it appears
+        # in the graph. A hard upper bound: with 4 nodes and 4 edges, findings
+        # cannot exceed edges * max_depth = 4 * 5 = 20. Diamond collapse is bounded.
+        assert len(chain_findings) <= 20, (
+            f"Finding count {len(chain_findings)} suggests exponential explosion"
+        )
+
+    def test_linear_chain_all_detected(self, tmp_path):
+        """Linear chain regression: SKILL.md -> A.md -> B.md chain must fire.
+        The graph builder indexes seed -> depth-1 refs -> depth-2 refs, so
+        SKILL->A->B is the deepest detectable chain from a single seed.
+        A finding at depth 2 (chain_depth=2, path=[SKILL, A], terminal=B)
+        must be present with at least MEDIUM severity."""
+        _write(tmp_path, "SKILL.md",
+               "---\nname: test\nauthor: a\n---\nread A.md\n")
+        _write(tmp_path, "A.md", "read B.md\n")
+        _write(tmp_path, "B.md", "terminal content\n")
+        findings = scanner.main(str(tmp_path))
+        chain_findings = [f for f in findings if "reference chain" in f.title.lower()]
+        assert len(chain_findings) >= 1, (
+            f"Expected at least 1 chain finding for SKILL->A->B, got {len(chain_findings)}: "
+            f"{[f.snippet for f in chain_findings]}"
+        )
+        # SKILL->A->B is depth 2 (path length 2), so severity is MEDIUM
+        assert any(f.severity in ("medium", "high") for f in chain_findings), (
+            f"Expected MEDIUM+ severity for chain finding, got: "
+            f"{[(f.severity, f.snippet) for f in chain_findings]}"
+        )

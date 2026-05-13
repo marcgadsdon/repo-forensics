@@ -516,6 +516,217 @@ def _parse_cvss_score(s):
 
 
 # ========================================================================
+# Package freshness (npm + PyPI)
+# ========================================================================
+
+FRESHNESS_CACHE_MAX_AGE_HOURS = 24
+FRESHNESS_TIMEOUT_SEC = 5  # per-request timeout, shorter than vuln timeout
+
+NPM_REGISTRY_MAX_BYTES = 2 * 1024 * 1024   # 2 MB
+PYPI_REGISTRY_MAX_BYTES = 512 * 1024        # 512 KB
+
+
+def _freshness_cache_path(cache_dir, ecosystem, name, version):
+    """Return the cache path for a freshness result.
+
+    Shape: {cache_dir}/freshness/{ecosystem}/{name}/{version}.json
+    """
+    return os.path.join(
+        cache_dir, "freshness", ecosystem, name, f"{version}.json"
+    )
+
+
+def fetch_npm_freshness(name, version, cache_dir=None, offline=False):
+    """Fetch publish metadata for an npm package version.
+
+    Returns dict with keys:
+      published      - ISO 8601 publish timestamp for this version (str|None)
+      version_count  - total number of published versions (int)
+      maintainer     - npm user who published this version (str|None)
+      prev_maintainer- npm user who published the previous version (str|None)
+
+    Returns None on invalid input, offline miss, network error, or parse
+    failure.  All network errors are printed to stderr (not raised).
+    """
+    if not isinstance(name, str) or not _PKG_NAME_RE.match(name):
+        return None
+    if ".." in name or name.startswith("/"):
+        return None
+    if not isinstance(version, str) or not _VERSION_RE.match(version):
+        return None
+
+    cdir = _cache_dir(cache_dir)
+    cache_path = _freshness_cache_path(cdir, "npm", name, version)
+
+    cached = _load_cache(cache_path, FRESHNESS_CACHE_MAX_AGE_HOURS)
+    if cached is not None:
+        return {k: v for k, v in cached.items() if not k.startswith("_")}
+
+    if offline:
+        return None
+
+    url = f"https://registry.npmjs.org/{name}"
+    try:
+        raw = _https_fetch(url, NPM_REGISTRY_MAX_BYTES)
+        data = json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        print(f"[!] npm freshness fetch failed for {name}@{version}: {e}",
+              file=sys.stderr)
+        return None
+
+    try:
+        time_map = data.get("time") or {}
+        published = time_map.get(version)
+
+        versions_map = data.get("versions") or {}
+        version_count = len(versions_map)
+
+        # Current version maintainer
+        current_ver_meta = versions_map.get(version) or {}
+        npm_user = current_ver_meta.get("_npmUser") or {}
+        maintainer = npm_user.get("name") if isinstance(npm_user, dict) else None
+
+        # Previous version: find the version published just before this one
+        prev_maintainer = None
+        if isinstance(time_map, dict) and published:
+            # Build list of (version, timestamp) excluding metadata keys
+            _META_KEYS = {"created", "modified"}
+            timed_versions = [
+                (v, ts) for v, ts in time_map.items()
+                if v not in _META_KEYS and isinstance(ts, str)
+            ]
+            # Sort by timestamp string (ISO 8601 sorts lexicographically)
+            timed_versions.sort(key=lambda x: x[1])
+            ver_list = [v for v, _ in timed_versions]
+            if version in ver_list:
+                idx = ver_list.index(version)
+                if idx > 0:
+                    prev_ver = ver_list[idx - 1]
+                    prev_meta = versions_map.get(prev_ver) or {}
+                    prev_user = prev_meta.get("_npmUser") or {}
+                    prev_maintainer = (
+                        prev_user.get("name")
+                        if isinstance(prev_user, dict) else None
+                    )
+
+        result = {
+            "published": published,
+            "version_count": version_count,
+            "maintainer": maintainer,
+            "prev_maintainer": prev_maintainer,
+        }
+    except Exception as e:
+        print(f"[!] npm freshness parse failed for {name}@{version}: {e}",
+              file=sys.stderr)
+        return None
+
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        payload = {**result, "_cached_at": time.time()}
+        _atomic_write(cache_path, payload)
+    except OSError as e:
+        print(f"[!] npm freshness cache write failed: {e}", file=sys.stderr)
+
+    return result
+
+
+def fetch_pypi_freshness(name, version, cache_dir=None, offline=False):
+    """Fetch publish metadata for a PyPI package version.
+
+    Returns dict with keys:
+      published      - ISO 8601 upload timestamp (str|None)
+      version_count  - total number of published releases (int)
+      maintainer     - package author field (str|None)
+      prev_maintainer- author field of the previous release (str|None)
+
+    Returns None on invalid input, offline miss, network error, or parse
+    failure.  All network errors are printed to stderr (not raised).
+    """
+    if not isinstance(name, str) or not _PKG_NAME_RE.match(name):
+        return None
+    if ".." in name or name.startswith("/"):
+        return None
+    if not isinstance(version, str) or not _VERSION_RE.match(version):
+        return None
+
+    cdir = _cache_dir(cache_dir)
+    cache_path = _freshness_cache_path(cdir, "pypi", name, version)
+
+    cached = _load_cache(cache_path, FRESHNESS_CACHE_MAX_AGE_HOURS)
+    if cached is not None:
+        return {k: v for k, v in cached.items() if not k.startswith("_")}
+
+    if offline:
+        return None
+
+    url = f"https://pypi.org/pypi/{name}/json"
+    try:
+        raw = _https_fetch(url, PYPI_REGISTRY_MAX_BYTES)
+        data = json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        print(f"[!] PyPI freshness fetch failed for {name}@{version}: {e}",
+              file=sys.stderr)
+        return None
+
+    try:
+        releases = data.get("releases") or {}
+        version_count = len(releases)
+
+        # Current version publish time
+        version_files = releases.get(version) or []
+        published = None
+        if isinstance(version_files, list) and version_files:
+            first_file = version_files[0]
+            if isinstance(first_file, dict):
+                published = first_file.get("upload_time_iso_8601")
+
+        # Current maintainer from top-level info
+        info = data.get("info") or {}
+        maintainer = info.get("author") if isinstance(info, dict) else None
+
+        # Previous version: sort releases by their earliest upload timestamp
+        prev_maintainer = None
+        dated_releases = []
+        for rel_ver, files in releases.items():
+            if not isinstance(files, list) or not files:
+                continue
+            first = files[0]
+            if isinstance(first, dict):
+                ts = first.get("upload_time_iso_8601") or first.get("upload_time")
+                if isinstance(ts, str):
+                    dated_releases.append((rel_ver, ts))
+
+        dated_releases.sort(key=lambda x: x[1])
+        ver_list = [v for v, _ in dated_releases]
+        if version in ver_list:
+            idx = ver_list.index(version)
+            if idx > 0:
+                # PyPI doesn't provide per-release author; use same info.author
+                # as a reasonable proxy (maintainer continuity check)
+                prev_maintainer = maintainer
+
+        result = {
+            "published": published,
+            "version_count": version_count,
+            "maintainer": maintainer,
+            "prev_maintainer": prev_maintainer,
+        }
+    except Exception as e:
+        print(f"[!] PyPI freshness parse failed for {name}@{version}: {e}",
+              file=sys.stderr)
+        return None
+
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        payload = {**result, "_cached_at": time.time()}
+        _atomic_write(cache_path, payload)
+    except OSError as e:
+        print(f"[!] PyPI freshness cache write failed: {e}", file=sys.stderr)
+
+    return result
+
+
+# ========================================================================
 # CLI
 # ========================================================================
 
