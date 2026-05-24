@@ -3,6 +3,7 @@
   "version": "2.9.0",
   "description": "Audit untrusted repos before they touch your agent. Fully local, zero dependencies, zero telemetry.",
   "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Repo Forensics",
     "shortDescription": "Security scanner for AI agent plugins, skills, and MCP servers.",
