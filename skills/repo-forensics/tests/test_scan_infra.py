@@ -419,3 +419,151 @@ class TestCachePoisoningPRT:
         findings = scanner.scan_github_actions(str(ci), ".github/workflows/ci.yml")
         cache = [f for f in findings if "Cache Poisoning" in f.title]
         assert len(cache) == 0
+
+
+class TestBase64DecodeAndExecute:
+    """Megalodon-style base64 decode-and-execute detection (May 2026)."""
+
+    def _make_workflow(self, tmp_path, run_line):
+        """Helper: create a minimal workflow with the given single-line run command."""
+        workflow = tmp_path / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        ci = workflow / "ci.yml"
+        ci.write_text(
+            "name: CI\n"
+            "on: [push]\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            f"      - run: {run_line}\n"
+        )
+        return str(ci)
+
+    def _make_multiline_workflow(self, tmp_path, *run_lines):
+        """Helper: create a workflow with a multi-line run block."""
+        workflow = tmp_path / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        ci = workflow / "ci.yml"
+        body = "\n".join(f"          {ln}" for ln in run_lines)
+        ci.write_text(
+            "name: CI\n"
+            "on: [push]\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: |\n"
+            f"{body}\n"
+        )
+        return str(ci)
+
+    def _megalodon_findings(self, findings):
+        return [f for f in findings if "Megalodon" in f.title]
+
+    # ------------------------------------------------------------------ #
+    # True-positive: decode-and-pipe patterns                              #
+    # ------------------------------------------------------------------ #
+
+    def test_echo_pipe_base64_d_pipe_bash(self, tmp_path):
+        """echo ... | base64 -d | bash is the canonical Megalodon pattern."""
+        ci = self._make_workflow(
+            tmp_path,
+            'echo "Q0I9Imh0dHBzOi8vZXZpbC5jb20vcGF5bG9hZCI=" | base64 -d | bash'
+        )
+        findings = scanner.scan_github_actions(ci, ".github/workflows/ci.yml")
+        hits = self._megalodon_findings(findings)
+        assert len(hits) >= 1
+        assert hits[0].severity == "critical"
+        assert hits[0].category == "ci-cd"
+
+    def test_echo_env_pipe_base64_decode_sh(self, tmp_path):
+        """echo $SECRET | base64 --decode | sh variant."""
+        ci = self._make_workflow(
+            tmp_path,
+            "echo $SECRET | base64 --decode | sh"
+        )
+        findings = scanner.scan_github_actions(ci, ".github/workflows/ci.yml")
+        hits = self._megalodon_findings(findings)
+        assert len(hits) >= 1
+        assert hits[0].severity == "critical"
+
+    def test_base64_d_heredoc_pipe_python3(self, tmp_path):
+        """base64 -d <<< "$PAYLOAD" | python3 heredoc variant."""
+        ci = self._make_workflow(
+            tmp_path,
+            'base64 -d <<< "$PAYLOAD" | python3'
+        )
+        findings = scanner.scan_github_actions(ci, ".github/workflows/ci.yml")
+        hits = self._megalodon_findings(findings)
+        assert len(hits) >= 1
+        assert hits[0].severity == "critical"
+
+    # ------------------------------------------------------------------ #
+    # False-positive: encode-only patterns must NOT fire                   #
+    # ------------------------------------------------------------------ #
+
+    def test_no_false_positive_base64_encode_only(self, tmp_path):
+        """base64 -w0 < file > output.b64 (encoding, not decoding) must not fire."""
+        ci = self._make_workflow(
+            tmp_path,
+            "base64 -w0 < service_account.json > encoded.b64"
+        )
+        findings = scanner.scan_github_actions(ci, ".github/workflows/ci.yml")
+        hits = self._megalodon_findings(findings)
+        assert len(hits) == 0
+
+    def test_no_false_positive_base64_env_var_read_no_pipe(self, tmp_path):
+        """Legitimate base64 env var read that is NOT piped to a shell must not fire."""
+        ci = self._make_workflow(
+            tmp_path,
+            "DECODED=$(echo $GCP_SA_KEY | base64 --decode) && echo $DECODED > sa.json"
+        )
+        findings = scanner.scan_github_actions(ci, ".github/workflows/ci.yml")
+        hits = self._megalodon_findings(findings)
+        assert len(hits) == 0
+
+    # ------------------------------------------------------------------ #
+    # workflow_dispatch trigger + decode-and-execute                       #
+    # ------------------------------------------------------------------ #
+
+    def test_workflow_dispatch_trigger_with_decode_and_execute(self, tmp_path):
+        """workflow_dispatch trigger + decode-and-execute is still CRITICAL."""
+        workflow = tmp_path / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        ci = workflow / "ci.yml"
+        ci.write_text(
+            "name: Deploy\n"
+            "on:\n"
+            "  workflow_dispatch:\n"
+            "    inputs:\n"
+            "      payload:\n"
+            "        description: 'Encoded payload'\n"
+            "        required: true\n"
+            "jobs:\n"
+            "  run:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo ${{ inputs.payload }} | base64 -d | bash\n"
+        )
+        findings = scanner.scan_github_actions(str(ci), ".github/workflows/ci.yml")
+        hits = self._megalodon_findings(findings)
+        assert len(hits) >= 1
+        assert hits[0].severity == "critical"
+
+    # ------------------------------------------------------------------ #
+    # Multi-line run block variants                                        #
+    # ------------------------------------------------------------------ #
+
+    def test_multiline_block_base64_decode_pipe_bash(self, tmp_path):
+        """Multi-line run block containing base64 -d | bash must be detected."""
+        ci = self._make_multiline_workflow(
+            tmp_path,
+            "echo 'Setting up environment'",
+            'echo "cGF5bG9hZA==" | base64 -d | bash',
+            "echo 'Done'",
+        )
+        findings = scanner.scan_github_actions(ci, ".github/workflows/ci.yml")
+        hits = self._megalodon_findings(findings)
+        assert len(hits) >= 1
+        assert hits[0].severity == "critical"
