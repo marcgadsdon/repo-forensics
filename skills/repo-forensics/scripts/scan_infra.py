@@ -19,6 +19,24 @@ SCANNER_NAME = "infra"
 # npm recommends >= 3 days to allow malware detection before install (npm 11+)
 MIN_RELEASE_AGE_DAYS = 3
 
+# Megalodon (May 2026): base64 decode-then-pipe-to-shell patterns.
+# The dangerous signal is base64 -d outputting INTO a pipe to a shell interpreter,
+# or the heredoc variant. Broad base64 presence is intentionally NOT flagged to
+# avoid false positives on GCP service account keys, Docker registry tokens, and
+# K8s CA certs that appear frequently in legitimate CI workflows.
+#
+# Dangerous examples:
+#   base64 -d | bash          (direct decode to shell)
+#   base64 --decode | sh      (--decode variant)
+#   base64 -d <<< "$PAYLOAD" | python3  (heredoc input variant)
+# NOT flagged:
+#   DECODED=$(echo $KEY | base64 --decode)  (captured in variable, not exec'd)
+#   base64 -w0 < file.json > out.b64        (encode-only, no decode pipe)
+_B64_EXEC_RE = re.compile(
+    r'base64\s+(?:-d|--decode)\s*\|'   # base64 -d | ... (output piped to shell)
+    r'|base64\s+-d\s*<<<'               # base64 -d <<< "..." heredoc variant
+)
+
 # Known compromised GitHub Actions (2025-2026 supply chain attacks)
 COMPROMISED_ACTIONS = {
     "tj-actions/changed-files": "CVE-2025-30066: Secret exfiltration via CI logs (March 2025)",
@@ -324,6 +342,19 @@ def scan_github_actions(file_path, rel_path):
                     category="ci-integrity"
                 ))
 
+            # Megalodon campaign (May 2026): base64 decode-and-execute.
+            # Pattern defined at module level as _B64_EXEC_RE.
+            if _B64_EXEC_RE.search(stripped):
+                findings.append(core.Finding(
+                    scanner=SCANNER_NAME, severity="critical",
+                    title="GHA: Base64 Decode-and-Execute in Workflow (Megalodon pattern)",
+                    description="Workflow decodes base64 content and pipes to a shell interpreter. "
+                        "This matches the Megalodon supply chain campaign (May 2026) which used "
+                        "this exact pattern to execute obfuscated payloads inside CI runners.",
+                    file=rel_path, line=i+1, snippet=stripped[:120],
+                    category="ci-cd"
+                ))
+
             # Deprecated workflow commands (log injection vectors)
             if '::set-output' in stripped or '::save-state' in stripped:
                 findings.append(core.Finding(
@@ -361,6 +392,18 @@ def scan_github_actions(file_path, rel_path):
                         category="ci-cd"
                     ))
                     break
+            # Megalodon: base64 decode-and-execute in multi-line run blocks
+            if _B64_EXEC_RE.search(block):
+                findings.append(core.Finding(
+                    scanner=SCANNER_NAME, severity="critical",
+                    title="GHA: Base64 Decode-and-Execute in Workflow (Megalodon pattern)",
+                    description="Multi-line run block decodes base64 content and pipes to a shell interpreter. "
+                        "This matches the Megalodon supply chain campaign (May 2026) which used "
+                        "this exact pattern to execute obfuscated payloads inside CI runners.",
+                    file=rel_path, line=line_no, snippet=block.strip()[:120],
+                    category="ci-cd"
+                ))
+
             # Strip comments (quote-aware) from each line before checking npm install
             block_code = "\n".join(
                 _strip_shell_comment(ln) for ln in block.splitlines()
