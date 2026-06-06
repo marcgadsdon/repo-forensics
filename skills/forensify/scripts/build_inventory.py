@@ -38,16 +38,20 @@ import glob as glob_module
 import json
 import os
 import re
+import sqlite3
 import stat
+import subprocess
 import sys
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.request import pathname2url
 
 # Maximum file size for config/credential file reads (1MB). Defense against
 # maliciously large files or symlinks to /dev/zero.
 _MAX_CONFIG_READ_BYTES = 1_048_576
+_MAX_PLUGIN_INDEX_ROWS = 500
 
 # ---------------------------------------------------------------------------
 # Schema invariants
@@ -1029,7 +1033,242 @@ def walk_plugins_surface(
     """Walk plugin manifests and registry files."""
     surfaces = eco_config.get("surfaces", {})
     plugins_cfg = surfaces.get("plugins") or {}
-    return _walk_generic_files(plugins_cfg, env, walk_depth_cap)
+    records = _walk_generic_files(plugins_cfg, env, walk_depth_cap)
+
+    if eco_key == "codex":
+        records.extend(_codex_plugin_list_json_records(env))
+    elif eco_key == "openclaw":
+        records.extend(_openclaw_sqlite_plugin_records(eco_config, env, walk_depth_cap))
+
+    return _dedupe_records(records)
+
+
+def _dedupe_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Stable de-duplication for inventory records from multiple sources."""
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for rec in records:
+        key = (
+            rec.get("path"),
+            rec.get("source"),
+            rec.get("plugin_id"),
+            rec.get("name"),
+            rec.get("version"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(rec)
+    return deduped
+
+
+def _codex_plugin_list_json_records(env: Dict[str, str]) -> List[Dict[str, Any]]:
+    """
+    Enumerate Codex plugins through the structured v0.137+ JSON CLI.
+
+    This is best-effort and read-only. Older Codex versions simply return no
+    CLI-sourced records, leaving filesystem plugin manifest globs as fallback.
+    """
+    env_allowlist = ("PATH", "HOME", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")
+    proc_env = {
+        key: value
+        for source in (os.environ, env)
+        for key, value in source.items()
+        if key in env_allowlist
+    }
+    try:
+        proc = subprocess.run(
+            ["codex", "plugin", "list", "--json"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            env=proc_env,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return []
+
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return []
+
+    installed = data.get("installed")
+    if not isinstance(installed, list):
+        return []
+
+    records: List[Dict[str, Any]] = []
+    for item in installed[:_MAX_PLUGIN_INDEX_ROWS]:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source") if isinstance(item.get("source"), dict) else {}
+        source_path = source.get("path")
+        rec: Dict[str, Any]
+        if isinstance(source_path, str) and os.path.exists(source_path):
+            rec = _file_record(source_path)
+        else:
+            rec = {"path": normalize_text(source_path)} if isinstance(source_path, str) else {}
+        rec.update({
+            "source": "codex plugin list --json",
+            "plugin_id": normalize_text(str(item.get("pluginId", ""))),
+            "name": normalize_text(str(item.get("name", ""))),
+            "marketplace_name": normalize_text(str(item.get("marketplaceName", ""))),
+            "version": normalize_text(str(item.get("version", ""))),
+            "installed": bool(item.get("installed")),
+            "enabled": bool(item.get("enabled")),
+            "install_policy": normalize_text(str(item.get("installPolicy", ""))),
+            "auth_policy": normalize_text(str(item.get("authPolicy", ""))),
+        })
+        records.append(rec)
+
+    return records
+
+
+def _openclaw_sqlite_plugin_records(
+    eco_config: Dict[str, Any],
+    env: Dict[str, str],
+    walk_depth_cap: int,
+) -> List[Dict[str, Any]]:
+    """
+    Read OpenClaw's SQLite-backed plugin indices when present.
+
+    OpenClaw 2026.6.1 moved plugin indices behind SQLite on some installs.
+    The schema is intentionally treated as discoverable: only plugin-like
+    tables are read, rows are capped, and candidate values are limited to
+    metadata columns such as name/version/path/enabled.
+    """
+    surfaces = eco_config.get("surfaces", {})
+    plugins_cfg = surfaces.get("plugins") or {}
+    templates = plugins_cfg.get("sqlite_globs") or [
+        "~/.openclaw/plugins/**/*.sqlite",
+        "~/.openclaw/plugins/**/*.db",
+        "~/.openclaw/*plugin*.sqlite",
+        "~/.openclaw/*plugin*.db",
+        "~/.openclaw/indices/*.sqlite",
+        "~/.openclaw/indices/*.db",
+    ]
+
+    db_paths: List[str] = []
+    seen_paths = set()
+    for tpl in templates:
+        if not isinstance(tpl, str):
+            continue
+        for path in safe_resolve_glob(tpl, env, walk_depth_cap):
+            if path not in seen_paths and os.path.isfile(path):
+                seen_paths.add(path)
+                db_paths.append(path)
+
+    records: List[Dict[str, Any]] = []
+    for db_path in db_paths:
+        records.extend(_read_openclaw_plugin_index(db_path))
+    return records
+
+
+def _read_openclaw_plugin_index(db_path: str) -> List[Dict[str, Any]]:
+    """Extract plugin metadata from a SQLite index without relying on schema names."""
+    records: List[Dict[str, Any]] = []
+    try:
+        conn = sqlite3.connect(f"file:{pathname2url(db_path)}?mode=ro", uri=True, timeout=1.0)
+    except sqlite3.Error:
+        return records
+
+    try:
+        conn.row_factory = sqlite3.Row
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+        for table_row in tables:
+            table = table_row["name"]
+            if table.startswith("sqlite_"):
+                continue
+            table_sql = _sqlite_ident(table)
+            columns = conn.execute(f"PRAGMA table_info({table_sql})").fetchall()
+            col_names = [c["name"] for c in columns]
+            lower_cols = {c.lower(): c for c in col_names}
+            if not _looks_like_plugin_table(table, lower_cols):
+                continue
+
+            select_cols = [
+                lower_cols[c] for c in (
+                    "id", "plugin_id", "name", "slug", "package", "version",
+                    "path", "install_path", "manifest_path", "enabled",
+                    "install_policy", "installpolicy",
+                ) if c in lower_cols
+            ]
+            if not select_cols:
+                continue
+            query_cols = ", ".join(_sqlite_ident(c) for c in select_cols)
+            rows = conn.execute(
+                f"SELECT {query_cols} FROM {table_sql} LIMIT {_MAX_PLUGIN_INDEX_ROWS}"
+            ).fetchall()
+            for row in rows:
+                rec = _openclaw_sqlite_row_record(db_path, table, row)
+                if rec:
+                    records.append(rec)
+    except sqlite3.Error:
+        return records
+    finally:
+        conn.close()
+
+    return records
+
+
+def _looks_like_plugin_table(table: str, lower_cols: Dict[str, str]) -> bool:
+    table_lower = table.lower()
+    if "plugin" in table_lower or "extension" in table_lower:
+        return True
+    has_name = any(c in lower_cols for c in ("name", "plugin_id", "slug", "package"))
+    has_plugin_meta = any(c in lower_cols for c in ("version", "path", "install_path", "manifest_path"))
+    return has_name and has_plugin_meta
+
+
+def _sqlite_ident(name: str) -> str:
+    """Quote a SQLite identifier that came from sqlite_master/PRAGMA metadata."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _openclaw_sqlite_row_record(
+    db_path: str,
+    table: str,
+    row: sqlite3.Row,
+) -> Optional[Dict[str, Any]]:
+    values = {k.lower(): row[k] for k in row.keys()}
+    name = values.get("name") or values.get("plugin_id") or values.get("slug") or values.get("package")
+    path = values.get("manifest_path") or values.get("install_path") or values.get("path")
+
+    if name is None and path is None:
+        return None
+
+    rec: Dict[str, Any]
+    if isinstance(path, str) and os.path.exists(path):
+        rec = _file_record(path)
+    else:
+        rec = {"path": normalize_text(path)} if isinstance(path, str) and path else {}
+
+    rec.update({
+        "source": "openclaw sqlite plugin index",
+        "index_path": normalize_text(db_path),
+        "index_table": normalize_text(table),
+    })
+    if name is not None:
+        rec["name"] = normalize_text(str(name))
+    plugin_id = values.get("plugin_id") or values.get("id")
+    if plugin_id is not None:
+        rec["plugin_id"] = normalize_text(str(plugin_id))
+    version = values.get("version")
+    if version is not None:
+        rec["version"] = normalize_text(str(version))
+    enabled = values.get("enabled")
+    if enabled is not None:
+        rec["enabled"] = bool(enabled)
+    install_policy = values.get("install_policy") or values.get("installpolicy")
+    if install_policy is not None:
+        rec["install_policy"] = normalize_text(str(install_policy))
+    return rec
 
 
 def walk_settings_surface(

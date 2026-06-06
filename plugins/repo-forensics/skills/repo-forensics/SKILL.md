@@ -30,10 +30,10 @@ Deep security auditing for repositories, AI agent skills, and MCP servers.
 - **Manifest drift detection** (`scan_manifest_drift.py`): Compares declared vs actual dependencies, catches phantom deps, runtime installs, conditional import+install fallbacks
 - **MCP rug pull detection**: Tool descriptions sourced from database, network, env vars, or conditional logic
 - **Enhanced AST analysis**: 12 patterns including marshal.loads, types.CodeType, sys.addaudithook, bytes decode obfuscation, self-modification
-- **Test suite**: 1,280+ pytest tests covering all scanners
+- **Test suite**: 1,350 pytest tests covering all scanners
 - **OpenClaw/ClawHub scanning**: Auto-detects OpenClaw skills, validates frontmatter, tools.json, SOUL.md, .clawhubignore
 - **Anti-forensics detection** (v2): Self-deleting installers, package.json overwrite, version mismatch (Axios supply chain pattern)
-- **Compromised version detection** (v2): Flags known-bad versions of legitimate packages (Axios 1.14.1/0.30.4, liteLLM 1.82.8)
+- **Compromised version detection** (v2): Flags known-bad versions of legitimate packages (Axios, liteLLM, vpmdhaj OpenSearch typosquats, Miasma/Red Hat Cloud Services)
 - **Suspicious npm scope detection** (v2): Flags systematic MCP server forking campaigns (iflow-mcp)
 - **Host IOC scanning** (v2): Known RAT binary paths, C2 domains, malicious file hashes
 - **CVE-2026-33068 detection** (v2): Workspace trust bypass via bypassPermissions in Claude Code settings
@@ -110,7 +110,7 @@ JSON output for automation:
 | **entropy** | Per-string Shannon entropy, base64 blocks, hex strings (combo detection) | full |
 | **infra** | Docker (ENV/ARG secrets, .env COPY), K8s, GitHub Actions, Claude Code config (CVE-2025-59536, CVE-2026-21852, CVE-2026-33068) | full |
 | **devcontainer** | JSON-based devcontainer.json analysis: host mounts, privileged mode, docker.sock, remoteEnv localEnv interpolation, lifecycle commands, untrusted features | skill + full |
-| **dependencies** | NPM + Python typosquatting, l33t normalization, IOC packages (SANDWORM_MODE 2026), compromised version detection (Axios, liteLLM), suspicious scope detection (iflow-mcp) | full |
+| **dependencies** | NPM + Python typosquatting, l33t normalization, IOC packages (SANDWORM_MODE 2026), 190+ package IOCs, compromised version detection (Axios, liteLLM, vpmdhaj, Miasma), suspicious scope detection (iflow-mcp) | full |
 | **ast_analysis** | Python AST: obfuscated exec chains, `__reduce__` backdoors, marshal/types bytecode, audit hook abuse, self-modification | full |
 | **binary** | Executables hidden as images/text files | full |
 | **git_forensics** | Time anomalies, GPG signature issues, identity inconsistencies | full |

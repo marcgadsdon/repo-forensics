@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import stat
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ from build_inventory import (  # noqa: E402
     build_inventory as build_inventory_fn,
     load_ecosystem_roots,
     safe_resolve_glob,
+    walk_plugins_surface,
     walk_skills_surface,
 )
 
@@ -527,6 +529,74 @@ class TestMCPWalker:
         toml_rec = next((r for r in records if r["path"].endswith("config.toml")), None)
         assert toml_rec is not None
         assert toml_rec["mcp_server_count"] == 2
+
+
+class TestPluginsWalker:
+    def test_codex_plugin_list_json_enumeration(self, tmp_path, monkeypatch):
+        plugin_dir = tmp_path / ".codex" / "plugins" / "repo-forensics"
+        plugin_dir.mkdir(parents=True)
+
+        class FakeProc:
+            returncode = 0
+            stdout = json.dumps({
+                "installed": [{
+                    "pluginId": "repo-forensics@test",
+                    "name": "repo-forensics",
+                    "marketplaceName": "test",
+                    "version": "2.9.2",
+                    "installed": True,
+                    "enabled": True,
+                    "source": {"source": "local", "path": str(plugin_dir)},
+                    "installPolicy": "AVAILABLE",
+                    "authPolicy": "ON_INSTALL",
+                }]
+            })
+
+        def fake_run(*_args, **_kwargs):
+            return FakeProc()
+
+        import build_inventory
+        monkeypatch.setattr(build_inventory.subprocess, "run", fake_run)
+
+        config = load_ecosystem_roots()
+        env = {"HOME": str(tmp_path), "CODEX_HOME": str(tmp_path / ".codex")}
+        eco_cfg = config["ecosystems"]["codex"]
+        records = walk_plugins_surface("codex", eco_cfg, env)
+
+        cli_records = [r for r in records if r.get("source") == "codex plugin list --json"]
+        assert len(cli_records) == 1
+        assert cli_records[0]["plugin_id"] == "repo-forensics@test"
+        assert cli_records[0]["enabled"] is True
+
+    def test_openclaw_sqlite_plugin_index_enumeration(self, tmp_path):
+        db_dir = tmp_path / ".openclaw" / "indices"
+        db_dir.mkdir(parents=True)
+        plugin_dir = tmp_path / ".openclaw" / "plugins" / "guard"
+        plugin_dir.mkdir(parents=True)
+        db_path = db_dir / "plugins.sqlite"
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "CREATE TABLE plugins (plugin_id TEXT, name TEXT, version TEXT, install_path TEXT, enabled INTEGER, install_policy TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO plugins VALUES (?, ?, ?, ?, ?, ?)",
+                ("guard@openclaw", "guard", "2026.6.1", str(plugin_dir), 1, "operator"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        config = load_ecosystem_roots()
+        env = {"HOME": str(tmp_path)}
+        records = walk_plugins_surface("openclaw", config["ecosystems"]["openclaw"], env)
+        sqlite_records = [r for r in records if r.get("source") == "openclaw sqlite plugin index"]
+
+        assert len(sqlite_records) == 1
+        assert sqlite_records[0]["plugin_id"] == "guard@openclaw"
+        assert sqlite_records[0]["version"] == "2026.6.1"
+        assert sqlite_records[0]["install_policy"] == "operator"
 
 
 class TestCredentialsWalker:

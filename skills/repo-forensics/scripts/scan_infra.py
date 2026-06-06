@@ -54,6 +54,33 @@ COMPROMISED_ACTIONS = {
     "checkmarx/ast-github-action": "TeamPCP: v2.3.28 and v2.3.35 compromised (March-April 2026)",
 }
 
+AGENTIC_CI_ACTION_RE = re.compile(
+    r'(?i)(anthropics?/claude-code(?:-base)?-action|'
+    r'anthropic-ai/claude-code(?:-base)?-action|'
+    r'claude-code(?:-base)?-action|openai/codex(?:-action)?)'
+)
+
+UNTRUSTED_AGENTIC_TRIGGER_RE = re.compile(
+    r'(?im)(^\s*(pull_request|pull_request_target|issues|issue_comment|discussion)\s*:'
+    r'|^\s*["\']?on["\']?\s*:\s*["\']?(pull_request|pull_request_target|issues|issue_comment|discussion)["\']?\s*$'
+    r'|^\s*["\']?on["\']?\s*:\s*\[[^\]]*(pull_request|pull_request_target|issues|issue_comment|discussion)[^\]]*\])'
+)
+
+AGENTIC_SENSITIVE_TOOLS_RE = re.compile(
+    r'(?is)\ballowed_tools\b\s*:\s*(?:[|>]\s*)?.{0,800}'
+    r'\b(Read|Bash|WebFetch|WebSearch|mcp__github|github_comment|create_pull_request)\b'
+)
+
+AGENTIC_EXTERNAL_CHANNEL_RE = re.compile(
+    r'(?is)\b(WebFetch|curl|wget|mcp__github|github_comment|create_pull_request)\b'
+    r'|show_full_output\s*:\s*true'
+)
+
+PROC_SECRET_PATH_RE = re.compile(
+    r'/proc/(?:self|[0-9]+)/environ|/proc/(?:self|[0-9]+)/mem',
+    re.IGNORECASE,
+)
+
 
 def _strip_shell_comment(line):
     """Strip shell comments, respecting single and double quotes.
@@ -367,8 +394,48 @@ def scan_github_actions(file_path, rel_path):
                     category="ci-cd"
                 ))
 
-        # Multi-line run block check
         content = ''.join(lines)
+
+        if PROC_SECRET_PATH_RE.search(content):
+            line_no = content[:PROC_SECRET_PATH_RE.search(content).start()].count('\n') + 1
+            findings.append(core.Finding(
+                scanner=SCANNER_NAME, severity="critical",
+                title="GHA: /proc Secret Exposure Path",
+                description=(
+                    "Workflow references /proc/self/environ or /proc/*/mem. "
+                    "Microsoft's June 2026 Claude Code GitHub Action research "
+                    "showed these paths can expose CI secrets when read by an "
+                    "agent tool."
+                ),
+                file=rel_path, line=line_no,
+                snippet=content.splitlines()[line_no - 1].strip()[:120],
+                category="agentic-ci"
+            ))
+
+        has_agentic_action = bool(AGENTIC_CI_ACTION_RE.search(content))
+        has_untrusted_trigger = bool(UNTRUSTED_AGENTIC_TRIGGER_RE.search(content))
+        has_secret_context = '${{ secrets.' in content or re.search(r'(?im)^\s*secrets\s*:\s*inherit\s*$', content)
+        has_sensitive_tools = bool(AGENTIC_SENSITIVE_TOOLS_RE.search(content))
+        has_external_channel = bool(AGENTIC_EXTERNAL_CHANNEL_RE.search(content))
+        if has_agentic_action and has_untrusted_trigger and has_secret_context and has_sensitive_tools:
+            action_match = AGENTIC_CI_ACTION_RE.search(content)
+            line_no = content[:action_match.start()].count('\n') + 1 if action_match else 0
+            severity = "critical" if has_external_channel else "high"
+            findings.append(core.Finding(
+                scanner=SCANNER_NAME, severity=severity,
+                title="GHA: Agentic CI Secret Exposure Risk",
+                description=(
+                    "AI workflow processes untrusted GitHub content while secrets "
+                    "and sensitive agent tools are available. This violates the "
+                    "agentic CI separation model highlighted by Microsoft's June "
+                    "2026 Claude Code GitHub Action case."
+                ),
+                file=rel_path, line=line_no,
+                snippet="agent action + untrusted trigger + secrets + sensitive tools",
+                category="agentic-ci"
+            ))
+
+        # Multi-line run block check
         secret_lines = {f.line for f in findings if 'Secret' in f.title}
         for m in re.finditer(r'run:\s*[|>]-?\s*\n((?:\s+.*\n)+)', content):
             block = m.group(1)

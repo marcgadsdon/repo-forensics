@@ -103,6 +103,7 @@ HARDCODED_MALICIOUS_DOMAINS = [
     "cjn37-uyaaa-aaaac-qgnva-cai.raw.icp0.io",  # CanisterWorm ICP blockchain C2, Apr 2026
     "check.git-service.com",    # durabletask PyPI C2, May 2026
     "t.m-kosche.com",           # Shared @antv/actions-cool C2, May 2026
+    "aab.sportsontheweb.net",   # vpmdhaj OpenSearch/Elastic typosquat C2, May 2026
 ]
 
 HARDCODED_MALICIOUS_NPM = {
@@ -115,6 +116,20 @@ HARDCODED_MALICIOUS_NPM = {
     "@deadcode09284814/axios-util",  # Shai-Hulud copycat (May 2026)
     "axois-utils",      # Shai-Hulud copycat (May 2026)
     "color-style-utils",  # Shai-Hulud copycat (May 2026)
+    "@vpmdhaj/elastic-helper",  # vpmdhaj OpenSearch/Elastic typosquat cluster (May 2026)
+    "@vpmdhaj/devops-tools",
+    "@vpmdhaj/opensearch-setup",
+    "@vpmdhaj/search-setup",
+    "opensearch-security-scanner",
+    "opensearch-setup",
+    "opensearch-setup-tool",
+    "opensearch-config-utility",
+    "search-engine-setup",
+    "search-cluster-setup",
+    "elastic-opensearch-helper",
+    "vpmdhaj-opensearch-setup",
+    "env-config-manager",
+    "app-config-utility",
 }
 
 HARDCODED_MALICIOUS_PYPI = {

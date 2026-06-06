@@ -77,6 +77,20 @@ ANTI_FORENSICS_PATTERNS = [
     (re.compile(r'(?i)child_process.*\brm\s'), "child_process used to remove files (anti-forensics)"),
 ]
 
+INSTALL_SCRIPT_IOC_PATTERNS = [
+    (re.compile(r'(?i)\baab\.sportsontheweb\.net\b'), "vpmdhaj OpenSearch typosquat C2 domain (Microsoft, May 2026)"),
+    (re.compile(r'(?i)\bX-Supply\b'), "vpmdhaj install-time HTTP beacon header X-Supply: 1"),
+    (re.compile(r'(?i)__DAEMONIZED\s*=?\s*["\']?1'), "detached payload marker __DAEMONIZED=1"),
+    (re.compile(r'(?i)\b(payload\.bin|opensearch_init\.js|ai_init\.js)\b'), "known stage-2 payload filename"),
+    (re.compile(r'\b169\.254\.169\.254\b|\b169\.254\.170\.2\b'), "cloud metadata endpoint access from install script"),
+    (re.compile(r'(?i)github\.com/oven-sh/bun/releases/download'), "Bun runtime download used as npm malware loader"),
+    (re.compile(r'(?i)/-/npm/v1/tokens|/-/whoami'), "npm token validation/enumeration endpoint"),
+    (re.compile(r'(?i)sts:GetCallerIdentity|AssumeRole|secretsmanager:(ListSecrets|GetSecretValue)'), "cloud credential enumeration API name"),
+    (re.compile(r'(?i)/proc/(?:self|[0-9]+)/mem|process\.memory|runner.*memory'), "CI runner process-memory scraping marker"),
+    (re.compile(r'(?i)bypass_2fa'), "npm 2FA-bypass token abuse marker"),
+    (re.compile(r'(?i)Miasma:\s*The\s*Spreading\s*Blight'), "Miasma campaign repository marker"),
+]
+
 RELAY_PATTERN = re.compile(
     r'^(node|python|python3|sh|bash|bun|deno)\s+[\w./-]+\.(js|mjs|cjs|py|sh)$'
 )
@@ -225,7 +239,7 @@ def scan_package_json(file_path, rel_path):
 
 
 def scan_js_anti_forensics(file_path, rel_path):
-    """Detect anti-forensics patterns in JS files referenced by lifecycle hooks.
+    """Detect anti-forensics and campaign IOC patterns in lifecycle JS files.
 
     Patterns include: self-deleting scripts (fs.unlinkSync(__filename)),
     package.json overwrite after execution, and version mismatch indicators.
@@ -251,6 +265,50 @@ def scan_js_anti_forensics(file_path, rel_path):
                         category="anti-forensics"
                     ))
 
+            for pattern, desc in INSTALL_SCRIPT_IOC_PATTERNS:
+                if pattern.search(line):
+                    findings.append(core.Finding(
+                        scanner=SCANNER_NAME, severity="critical",
+                        title=f"Install Script IOC: {desc}",
+                        description=(
+                            "Lifecycle script contains a high-confidence supply "
+                            "chain IOC or behavior observed in active 2026 npm "
+                            "credential-stealing campaigns."
+                        ),
+                        file=rel_path, line=i + 1,
+                        snippet=line.strip()[:120],
+                        category="install-script-ioc"
+                    ))
+
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"[!] Skipped {rel_path}: {e}", file=sys.stderr)
+    return findings
+
+
+def scan_js_install_iocs(file_path, rel_path):
+    """Detect high-confidence install-script IOCs in generic JS entrypoints."""
+    findings = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        for i, line in enumerate(content.split('\n')):
+            if len(line) > core.MAX_LINE_LENGTH:
+                continue
+            for pattern, desc in INSTALL_SCRIPT_IOC_PATTERNS:
+                if pattern.search(line):
+                    findings.append(core.Finding(
+                        scanner=SCANNER_NAME, severity="critical",
+                        title=f"Install Script IOC: {desc}",
+                        description=(
+                            "JavaScript entrypoint contains a high-confidence "
+                            "supply chain IOC or behavior observed in active "
+                            "2026 npm credential-stealing campaigns."
+                        ),
+                        file=rel_path, line=i + 1,
+                        snippet=line.strip()[:120],
+                        category="install-script-ioc"
+                    ))
     except (OSError, UnicodeDecodeError) as e:
         print(f"[!] Skipped {rel_path}: {e}", file=sys.stderr)
     return findings
@@ -603,8 +661,10 @@ def main():
         elif basename.endswith('.pth'):
             all_findings.extend(scan_pth_files(file_path, rel_path))
         elif basename in ('setup.js', 'install.js', 'postinstall.js', 'preinstall.js',
-                          'setup.mjs', 'config.mjs'):
+                          'setup.mjs', 'config.mjs', 'opensearch_init.js', 'ai_init.js'):
             all_findings.extend(scan_js_anti_forensics(file_path, rel_path))
+        elif basename == 'index.js':
+            all_findings.extend(scan_js_install_iocs(file_path, rel_path))
         elif basename == 'binding.gyp':
             all_findings.append(core.Finding(
                 scanner=SCANNER_NAME, severity="high",

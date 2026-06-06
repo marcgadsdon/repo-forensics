@@ -240,6 +240,25 @@ RUG_PULL_PATTERNS = [
     (re.compile(r'annotations\s*[=:]\s*(requests|fetch|db\.|cursor\.|os\.environ|os\.getenv)'), "Rug Pull Enabler: annotations from external source"),
 ]
 
+MCP_STDIO_COMMAND_RISKS = [
+    (
+        re.compile(r'(?is)StdioServerParameters\s*\([^)]*\bcommand\s*=\s*(?!["\'])([A-Za-z_][\w.]*|request\.|req\.|os\.environ|os\.getenv|process\.env)'),
+        "StdioServerParameters command is sourced from a variable or request/env object",
+    ),
+    (
+        re.compile(r'(?is)StdioServerParameters\s*\([^)]*\bargs\s*=\s*(?!\s*\[)([A-Za-z_][\w.]*|request\.|req\.|os\.environ|os\.getenv|process\.env)'),
+        "StdioServerParameters args are sourced from a variable or request/env object",
+    ),
+    (
+        re.compile(r'(?is)MultiServerMCPClient\s*\(\s*(?!\{)([A-Za-z_][\w.]*|request\.|req\.|json\.load|yaml\.load|os\.environ|os\.getenv|process\.env)'),
+        "MultiServerMCPClient configuration is mutable or externally sourced",
+    ),
+    (
+        re.compile(r'(?is)["\']command["\']\s*:\s*(os\.environ|os\.getenv|process\.env|request\.|req\.|body\.)'),
+        "MCP command field is sourced from env or request data",
+    ),
+]
+
 # MCP framework signals for file heuristic
 MCP_SIGNALS = [
     '@mcp.tool', 'mcp.Server', 'McpServer', 'ModelContextProtocol',
@@ -423,6 +442,7 @@ def scan_file(file_path, rel_path):
             findings.extend(scan_patterns(content, rel_path, MCP_CONFIG_RISKS, "mcp-config-risk", "critical"))
             # Category G: Rug Pull Enablers - dynamic tool descriptions
             findings.extend(scan_patterns(content, rel_path, RUG_PULL_PATTERNS, "rug-pull-enabler", "high"))
+            findings.extend(scan_patterns(content, rel_path, MCP_STDIO_COMMAND_RISKS, "mcp-stdio-command-risk", "high"))
 
     # MCP config files (.json) — check for enableAllProjectMcpServers, ANTHROPIC_BASE_URL
     if ext == '.json' or basename in ('settings.json', 'claude_desktop_config.json', '.mcp.json'):

@@ -1,6 +1,6 @@
 {
-  "version": "2.7.6",
-  "updated": "2026-05-05",
+  "version": "2.9.2",
+  "updated": "2026-06-06",
   "c2_ips": [
     "91.92.242.30",
     "54.91.154.110",
@@ -24,7 +24,15 @@
     "sfrclak.com",
     "api.cloud-aws.adc-e.uk",
     "models.litellm.cloud",
-    "checkmarx.zone"
+    "checkmarx.zone",
+    "filev2.getsession.org",
+    "seed1.getsession.org",
+    "seed2.getsession.org",
+    "seed3.getsession.org",
+    "cjn37-uyaaa-aaaac-qgnva-cai.raw.icp0.io",
+    "check.git-service.com",
+    "t.m-kosche.com",
+    "aab.sportsontheweb.net"
   ],
   "malicious_npm_packages": [
     "rimarf",
@@ -40,7 +48,21 @@
     "anthropic-sdk-node",
     "claude-code-cli",
     "clawclient",
-    "plain-crypto-js"
+    "plain-crypto-js",
+    "@vpmdhaj/elastic-helper",
+    "@vpmdhaj/devops-tools",
+    "@vpmdhaj/opensearch-setup",
+    "@vpmdhaj/search-setup",
+    "opensearch-security-scanner",
+    "opensearch-setup",
+    "opensearch-setup-tool",
+    "opensearch-config-utility",
+    "search-engine-setup",
+    "search-cluster-setup",
+    "elastic-opensearch-helper",
+    "vpmdhaj-opensearch-setup",
+    "env-config-manager",
+    "app-config-utility"
   ],
   "malicious_pypi_packages": [
     "anthopic",

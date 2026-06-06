@@ -27,6 +27,12 @@ class TestSecretDetection:
         findings = _scan_repo(repo_with_secrets)
         assert any("database" in f.title.lower() or "postgresql" in f.snippet.lower() for f in findings)
 
+    def test_detects_codex_api_key_env_var(self, tmp_path):
+        config = tmp_path / ".env"
+        config.write_text("CODEX_API_KEY=codex_live_abcdefghijklmnopqrstuvwxyz123456\n")
+        findings = _scan_repo(tmp_path)
+        assert any("CODEX_API_KEY" in f.title for f in findings)
+
 
 class TestFrameworkEnvPrefixLeaks:
     def test_detects_next_public_secret(self, repo_with_framework_env_leak):

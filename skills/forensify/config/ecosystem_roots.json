@@ -209,7 +209,8 @@
         "plugins": {
           "globs": [
             "${CODEX_HOME}/plugins/**/.codex-plugin/plugin.json"
-          ]
+          ],
+          "cli_enumeration": "codex plugin list --json"
         },
         "commands_and_memory": {
           "memory_files": [
@@ -355,6 +356,14 @@
         "plugins": {
           "globs": [
             "~/.openclaw/plugins/*/openclaw.plugin.json"
+          ],
+          "sqlite_globs": [
+            "~/.openclaw/plugins/**/*.sqlite",
+            "~/.openclaw/plugins/**/*.db",
+            "~/.openclaw/*plugin*.sqlite",
+            "~/.openclaw/*plugin*.db",
+            "~/.openclaw/indices/*.sqlite",
+            "~/.openclaw/indices/*.db"
           ]
         },
         "settings": {

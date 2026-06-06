@@ -47,6 +47,8 @@ PATTERNS = [
      "regex": re.compile(r'sk-[a-zA-Z0-9]{20,}')},
     {"name": "Anthropic API Key", "severity": "high",
      "regex": re.compile(r'sk-ant-[a-zA-Z0-9]{20,}')},
+    {"name": "Codex API Key (CODEX_API_KEY)", "severity": "high",
+     "regex": re.compile(r'CODEX_API_KEY\s*[=:]\s*[\'"]?[A-Za-z0-9_\-]{20,}')},
 
     # --- High: Payment & Communication ---
     {"name": "Stripe API Key", "severity": "high",

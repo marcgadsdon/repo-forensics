@@ -11,7 +11,7 @@ Audit untrusted repos before they touch your agent. Fully local, zero dependenci
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/repo-forensics/releases"><img src="https://img.shields.io/badge/version-2.9.1-green.svg" alt="Version 2.9.1"></a>
+  <a href="https://github.com/alexgreensh/repo-forensics/releases"><img src="https://img.shields.io/badge/version-2.9.2-green.svg" alt="Version 2.9.2"></a>
   <a href="https://github.com/alexgreensh/repo-forensics/releases"><img src="https://img.shields.io/github/release-date/alexgreensh/repo-forensics?label=last%20release&color=blue" alt="Last Release"></a>
   <a href="https://github.com/alexgreensh/repo-forensics/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/repo-forensics" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/repo-forensics/commits/main"><img src="https://img.shields.io/github/commit-activity/m/alexgreensh/repo-forensics" alt="Commit Activity"></a>
@@ -19,10 +19,10 @@ Audit untrusted repos before they touch your agent. Fully local, zero dependenci
 <p align="center">
   <img src="https://img.shields.io/badge/scanners-20-blue.svg" alt="20 Scanners">
   <img src="https://img.shields.io/badge/patterns-800%2B-orange.svg" alt="800+ Patterns">
-  <img src="https://img.shields.io/badge/tests-1%2C306-brightgreen.svg" alt="1,306 Tests">
+  <img src="https://img.shields.io/badge/tests-1%2C350-brightgreen.svg" alt="1,350 Tests">
   <img src="https://img.shields.io/badge/CVE%20%2B%20CISA%20KEV-live%20scanning-critical.svg" alt="Live CVE + CISA KEV scanning">
   <img src="https://img.shields.io/badge/correlation%20rules-41-purple.svg" alt="41 Correlation Rules">
-  <img src="https://img.shields.io/badge/package%20IOCs-140%2B-red.svg" alt="140+ Package IOCs">
+  <img src="https://img.shields.io/badge/package%20IOCs-190%2B-red.svg" alt="190+ Package IOCs">
 </p>
 <p align="center">
   <img src="https://img.shields.io/badge/Claude%20Code-auto--scan-5436DA.svg?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6IiBmaWxsPSIjZmZmIi8+PC9zdmc+" alt="Claude Code">
@@ -74,6 +74,8 @@ python3 scripts/codex_install.py
 python3 scripts/codex_install.py --verify --require-registered
 ```
 
+Codex v0.137+ inventory uses `codex plugin list --json` when available, falling back to filesystem manifests on older installs.
+
 </details>
 
 <details>
@@ -86,6 +88,7 @@ python3 scripts/openclaw_install.py
 ```
 
 This adds PreToolUse, PostToolUse, and SessionStart hooks to `~/.openclaw/openclaw.json`. Uninstall with `--uninstall`.
+OpenClaw 2026.6.1+ operator install policy is supported; the installer preserves `security.installPolicy`, does not use unsafe force-install flags, and can be checked with `python3 scripts/openclaw_install.py --verify`.
 
 </details>
 
@@ -177,6 +180,8 @@ Once installed as a plugin, repo-forensics runs automatically in the background.
 | OpenClaw | Not auto-wired by plugin system | One-time: `python3 scripts/openclaw_install.py` |
 | Cursor / NanoClaw / CLI | N/A (no plugin hook system) | Use manual `/repo-forensics` invocation |
 
+Claude Code v2.1.160+ may ask for an extra acceptEdits confirmation before writing package-manager and dev-environment config files such as `.npmrc`, `.yarnrc*`, `bunfig.toml`, `.bazelrc`, `.pre-commit-config.yaml`, and `.devcontainer/`. Repo Forensics scans these files normally; the extra prompt is Claude Code's own write-safety layer.
+
 ---
 
 ## What It Finds
@@ -219,7 +224,7 @@ The result is a severity-ranked verdict with exit codes designed for CI/CD gatin
 
 ## Battle-Tested Against Real Attacks
 
-1,306 tests across 34 test files. Not synthetic toy examples: detection patterns built from real supply chain campaigns that hit production systems.
+1,350 tests across 38 test files. Not synthetic toy examples: detection patterns built from real supply chain campaigns that hit production systems.
 
 **Named attack campaigns in the IOC database:**
 
@@ -231,6 +236,8 @@ The result is a severity-ranked verdict with exit codes designed for CI/CD gatin
 | ESLint/Prettier phishing | Jul 2025 | `postinstall` script exfiltrated npm tokens |
 | Nx S1ngularity | Aug 2025 | GitHub/npm/AWS token harvester across 8 Nx packages |
 | Shai-Hulud v2 | Nov 2025 | 800+ packages, `preinstall` with Bun runtime stager, destructive wipe fallback |
+| vpmdhaj OpenSearch typosquats | May 2026 | OpenSearch/Elastic-looking npm packages stealing CI/CD, cloud, and npm secrets |
+| Miasma / Red Hat Cloud Services | Jun 2026 | Trusted namespace compromise with authentic provenance, npm `preinstall`, Bun stager, runner-memory scraping |
 | Ghost Campaign | Feb 2026 | Entirely malicious packages, no legitimate prior versions |
 | NK Contagious Interview | Mar 2026 | North Korean state-sponsored RAT via npm |
 | React Native compromise | Mar 2026 | Mobile credential stealer |
@@ -243,7 +250,7 @@ The result is a severity-ranked verdict with exit codes designed for CI/CD gatin
 
 Every campaign above has version-pinned IOCs in `compromised_versions.json`, detection rules in the lifecycle and dependency scanners, and correlation rules for compound attack patterns.
 
-**The tests are safe to run.** All 1,306 tests use synthetic fixtures in temporary directories. No real malware is downloaded or executed. Pattern matching runs against fake package.json files containing attack signatures, the same way antivirus software tests against EICAR strings.
+**The tests are safe to run.** All 1,350 tests use synthetic fixtures in temporary directories. No real malware is downloaded or executed. Pattern matching runs against fake package.json files containing attack signatures, the same way antivirus software tests against EICAR strings.
 
 ---
 
@@ -283,7 +290,7 @@ Each scanner targets a distinct attack surface. Together they cover the full thr
 |---------|----------------|----------|
 | **skill_threats** | Prompt injection, unicode smuggling, ClickFix delivery, MCP injection, LITL attack padding, known campaign IOCs, **GlassWorm supplemental variation selectors** (VS17-VS256) | 11 detection categories, 160+ regex patterns |
 | **mcp_security** | SQL to prompt escalation, tool poisoning, tool shadowing, rug pull enablers, config CVEs, **TrustFall .mcp.json RCE** (inline node -e / python -c / fetch+eval) | Schema field inspection, Invariant Labs TPA patterns, JSON structural analysis |
-| **dependencies** | Typosquatting, version confusion, SANDWORM_MODE IOC packages, StarJacking detection, transitive supply chain, **known CVEs + CISA KEV auto-enrichment** | 500+ popular packages, l33t normalization, repo-to-package validation, lockfile deep parsing (npm/yarn/poetry/pipfile), OSV API per-package queries, KEV catalog cross-reference |
+| **dependencies** | Typosquatting, version confusion, SANDWORM_MODE IOC packages, StarJacking detection, transitive supply chain, **known CVEs + CISA KEV auto-enrichment** | 500+ popular packages, 190+ package IOCs, l33t normalization, repo-to-package validation, lockfile deep parsing (npm/yarn/poetry/pipfile), OSV API per-package queries, KEV catalog cross-reference |
 | **lifecycle** | Malicious install hooks in npm and pip, `.pth` file injection (liteLLM-style), Command-Jacking, Bun runtime stager, **paste service dead-drops** (pastebin/hastebin/dpaste/gist), **AI agent config injection** (~/.claude/, ~/.cursor/, ~/.continue/) | `postinstall`/`preinstall` analysis, `.pth` detection, paste URL + agent config path patterns |
 | **git_forensics** | Timestamp manipulation, identity spoofing, bad GPG signatures, **git replace objects** (refs/replace/*), **git grafts** (.git/info/grafts) -- history forgery detection no other tool performs | Commit history analysis, git object store forensics |
 | **binary** | Executables disguised as images/text/docs, **audio steganography** (executable payloads in WAV/MP3/FLAC), **embedded PE detection** (polyglot files with MZ+PE at non-zero offset) | Magic number detection, audio data section analysis, PE signature validation |
@@ -533,7 +540,7 @@ Exit codes: `0` = clean, `1` = warn, `2` = block merge.
 | **IOC auto-update** | `--update-iocs` pulls latest C2 IPs, malicious domains, known-bad packages |
 | **Installation verification** | `--verify-install` checks repo-forensics itself for tampering |
 | **Manifest drift** | Declared vs actual imports, phantom deps, runtime installs |
-| **1,306 pytest tests** | Full coverage across 34 test files |
+| **1,350 pytest tests** | Full coverage across 38 test files |
 
 </details>
 

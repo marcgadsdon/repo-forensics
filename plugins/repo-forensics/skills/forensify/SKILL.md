@@ -76,7 +76,9 @@ dual-format output: `briefing.md` + `briefing.json`.
 
 4. **Plugins & marketplace trust chain** — installed plugins, marketplace
    registries, blocklists, manifest integrity. Claude Code + Codex + OpenClaw
-   plugin manifests.
+   plugin manifests. Codex v0.137+ uses `codex plugin list --json` as a
+   structured enumeration source when present; OpenClaw SQLite-backed plugin
+   indices are read in read-only mode when present.
 
 5. **Commands, agents, config & memory** — slash commands, subagent definitions,
    `CLAUDE.md`, `AGENTS.md` (cross-ecosystem convention: OpenClaw, Codex, and

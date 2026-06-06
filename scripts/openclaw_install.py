@@ -5,7 +5,7 @@ Wires the same PreToolUse, PostToolUse, and SessionStart hooks that
 Claude Code uses, adapted for OpenClaw's hook system in openclaw.json.
 
 Usage:
-    python3 openclaw_install.py [--uninstall]
+    python3 openclaw_install.py [--uninstall] [--verify]
 """
 
 import argparse
@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 MARKER = "repo-forensics"
+HOOK_EVENTS = ("PreToolUse", "PostToolUse", "SessionStart")
 
 
 def _repo_root():
@@ -92,6 +93,43 @@ def _remove_ours(hooks_dict):
     return cleaned
 
 
+def _get_dotted(config, key):
+    cur = config
+    for part in key.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _policy_message(config):
+    install_policy = _get_dotted(config, "security.installPolicy")
+    if install_policy:
+        return (
+            "[repo-forensics] OpenClaw security.installPolicy detected: "
+            f"{install_policy}. This installer writes hooks directly to "
+            "openclaw.json and does not use --dangerously-force-unsafe-install."
+        )
+    return (
+        "[repo-forensics] OpenClaw install policy not set in openclaw.json. "
+        "No force-install bypass flags are used."
+    )
+
+
+def _verify_config(config):
+    errors = []
+    hooks = config.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return ["openclaw.json hooks must be an object"]
+    for event in HOOK_EVENTS:
+        entries = hooks.get(event)
+        if not isinstance(entries, list):
+            errors.append(f"missing OpenClaw hook list: hooks.{event}")
+        elif not any(isinstance(entry, dict) and _is_ours(entry) for entry in entries):
+            errors.append(f"repo-forensics hook not present in hooks.{event}")
+    return errors
+
+
 def install():
     path = _openclaw_config_path()
     config = _load_config(path)
@@ -114,6 +152,7 @@ def install():
 
     print(f"[repo-forensics] Hooks installed to {path}")
     print("[repo-forensics] 3 hooks active: PreToolUse (IOC gate), PostToolUse (auto-scan), SessionStart (security scan)")
+    print(_policy_message(config))
     return 0
 
 
@@ -135,11 +174,32 @@ def uninstall():
     return 0
 
 
+def verify():
+    path = _openclaw_config_path()
+    if not path.exists():
+        print(f"[repo-forensics] OpenClaw config not found: {path}", file=sys.stderr)
+        return 1
+    config = _load_config(path)
+    errors = _verify_config(config)
+    if errors:
+        print("[repo-forensics] OpenClaw hook verification failed:", file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
+        print(_policy_message(config), file=sys.stderr)
+        return 1
+    print(f"[repo-forensics] OpenClaw hooks verified: {path}")
+    print(_policy_message(config))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Install repo-forensics hooks for OpenClaw")
     parser.add_argument("--uninstall", action="store_true", help="Remove repo-forensics hooks")
+    parser.add_argument("--verify", action="store_true", help="Verify repo-forensics hooks are present")
     args = parser.parse_args()
 
+    if args.verify:
+        return verify()
     if args.uninstall:
         return uninstall()
     return install()

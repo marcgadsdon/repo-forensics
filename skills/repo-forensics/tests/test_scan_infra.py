@@ -215,6 +215,113 @@ class TestGitHubActions:
         assert not any("npm install" in f.title.lower() for f in findings)
 
 
+class TestAgenticCI:
+    """Claude Code GitHub Action secret exposure guardrails."""
+
+    def test_claude_action_untrusted_trigger_with_secrets_and_tools(self, tmp_path):
+        workflow = tmp_path / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        ci = workflow / "claude.yml"
+        ci.write_text(
+            "name: Claude\n"
+            "on:\n"
+            "  issue_comment:\n"
+            "permissions:\n"
+            "  contents: write\n"
+            "  issues: write\n"
+            "jobs:\n"
+            "  agent:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - uses: anthropics/claude-code-action@v2\n"
+            "        with:\n"
+            "          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}\n"
+            "          allowed_tools: Read,Bash,WebFetch,mcp__github\n"
+            "          show_full_output: true\n"
+        )
+        findings = scanner.scan_github_actions(str(ci), ".github/workflows/claude.yml")
+        agentic = [f for f in findings if f.category == "agentic-ci"]
+        assert any("Agentic CI Secret Exposure" in f.title for f in agentic)
+        assert any(f.severity == "critical" for f in agentic)
+
+    def test_claude_action_scalar_untrusted_trigger_with_secrets_and_tools(self, tmp_path):
+        workflow = tmp_path / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        ci = workflow / "claude.yml"
+        ci.write_text(
+            "name: Claude\n"
+            "on: issue_comment\n"
+            "jobs:\n"
+            "  agent:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - uses: anthropics/claude-code-action@v2\n"
+            "        with:\n"
+            "          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}\n"
+            "          allowed_tools: Read,Bash,WebFetch,mcp__github\n"
+            "          show_full_output: true\n"
+        )
+        findings = scanner.scan_github_actions(str(ci), ".github/workflows/claude.yml")
+        agentic = [f for f in findings if f.category == "agentic-ci"]
+        assert any("Agentic CI Secret Exposure" in f.title for f in agentic)
+
+    def test_claude_action_quoted_scalar_untrusted_trigger_with_secrets_and_tools(self, tmp_path):
+        workflow = tmp_path / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        ci = workflow / "claude.yml"
+        ci.write_text(
+            "name: Claude\n"
+            "'on': 'pull_request'\n"
+            "jobs:\n"
+            "  agent:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - uses: anthropics/claude-code-action@v2\n"
+            "        with:\n"
+            "          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}\n"
+            "          allowed_tools: Read,Bash,WebFetch,mcp__github\n"
+        )
+        findings = scanner.scan_github_actions(str(ci), ".github/workflows/claude.yml")
+        agentic = [f for f in findings if f.category == "agentic-ci"]
+        assert any("Agentic CI Secret Exposure" in f.title for f in agentic)
+
+    def test_proc_environ_path_is_critical(self, tmp_path):
+        workflow = tmp_path / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        ci = workflow / "claude.yml"
+        ci.write_text(
+            "name: Claude\n"
+            "on: [pull_request]\n"
+            "jobs:\n"
+            "  agent:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo /proc/self/environ\n"
+        )
+        findings = scanner.scan_github_actions(str(ci), ".github/workflows/claude.yml")
+        assert any(f.category == "agentic-ci" and f.severity == "critical" for f in findings)
+
+    def test_push_only_claude_action_with_secrets_not_agentic_ci(self, tmp_path):
+        workflow = tmp_path / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        ci = workflow / "claude.yml"
+        ci.write_text(
+            "name: Claude\n"
+            "on:\n"
+            "  push:\n"
+            "jobs:\n"
+            "  agent:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - uses: anthropics/claude-code-action@v2\n"
+            "        with:\n"
+            "          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}\n"
+            "          allowed_tools: Read,Bash\n"
+        )
+        findings = scanner.scan_github_actions(str(ci), ".github/workflows/claude.yml")
+        assert not any("Agentic CI Secret Exposure" in f.title for f in findings)
+
+
 class TestNpmrc:
     def test_detects_strict_ssl_false(self, tmp_path):
         npmrc = tmp_path / ".npmrc"
