@@ -60,9 +60,9 @@
   },
   "hook_count": 8,
   "repo_manifests": {
-    ".claude-plugin/marketplace.json": "c0009dbb1cc5e9f020d8457131af704a2f25c767ea05c70582a7946e618e686d",
-    ".claude-plugin/plugin.json": "764dd571ea96de896bd7c3f046ab2ca0cbeac546da8e5bf8fa9be33a0908e47e",
-    ".codex-plugin/plugin.json": "7917c86ff268c790115b39f744f25b977d615e91505af1d24499274bf2e08732"
+    ".claude-plugin/marketplace.json": "87dc20d2b62a2ceb6d9dd63609eeebda304716bc1de6135da658fd227d1d3822",
+    ".claude-plugin/plugin.json": "8e6a57cf5de903bf74ee0b7783babca7f15145fd1da78479a8d14e585ef8a906",
+    ".codex-plugin/plugin.json": "6c8e6203341863a7b430225ebd220332fd7feb3dd5cb00efa9d30b090d5732b2"
   },
   "manifest_count": 3,
   "repo_source_manifests": {
