@@ -18,7 +18,6 @@ Covers:
 import json
 import os
 import time
-import pytest
 
 import ioc_manager
 
@@ -376,3 +375,101 @@ class TestMay2026IocAdditions:
         """get_iocs() malicious_npm set must include the chalk-tempalte typosquat."""
         iocs = ioc_manager.get_iocs(cache_dir=str(tmp_path))
         assert "chalk-tempalte" in iocs["malicious_npm"]
+
+
+# ---------------------------------------------------------------------------
+# KTD-11: signed IOC feed verify-on-load (additive, offline)
+# ---------------------------------------------------------------------------
+
+import sys as _sys  # noqa: E402
+
+_REPO_SCRIPTS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))), "scripts")
+_sys.path.insert(0, _REPO_SCRIPTS)
+import _ed25519_sign  # noqa: E402
+
+_IOC_TEST_SEED = bytes.fromhex(
+    "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
+_IOC_TEST_PRIV, _IOC_TEST_PUB = _ed25519_sign.keypair(_IOC_TEST_SEED)
+
+
+def _write_signed_cache(cache_dir, feed_dict, priv=_IOC_TEST_PRIV,
+                        pub=_IOC_TEST_PUB, sign=True, tamper=False):
+    """Write a fresh IOC cache (.json) plus the raw bytes + detached signature
+    so verify-on-load can re-check it. Returns the raw bytes used."""
+    # Fresh JSON cache (passes TTL).
+    cache = os.path.join(cache_dir, ioc_manager.CACHE_FILENAME)
+    to_save = dict(feed_dict)
+    to_save["_cached_at"] = time.time()
+    with open(cache, "w", encoding="utf-8") as f:
+        json.dump(to_save, f)
+    # Raw signed bytes = the feed body WITHOUT the _cached_at wrapper.
+    raw = json.dumps(feed_dict).encode("utf-8")
+    with open(os.path.join(cache_dir, ioc_manager.RAW_CACHE_FILENAME), "wb") as f:
+        f.write(raw)
+    if sign:
+        sig = _ed25519_sign.sign(raw, priv, pub)
+        if tamper:
+            sig = bytearray(sig)
+            sig[0] ^= 0x01
+            sig = bytes(sig)
+        with open(os.path.join(cache_dir, ioc_manager.SIG_CACHE_FILENAME), "wb") as f:
+            f.write(sig)
+    return raw
+
+
+class TestIocSignatureVerifyOnLoad:
+    """New-client behavior for the signed IOC feed; old-client behavior must be
+    unaffected by the extra .sig file existing."""
+
+    def test_valid_signature_not_degraded(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ioc_manager, "IOC_FEED_PUBKEY_HEX", _IOC_TEST_PUB.hex())
+        feed = {"version": "test", "malicious_domains": ["signed-evil.com"]}
+        _write_signed_cache(str(tmp_path), feed)
+        iocs = ioc_manager.get_iocs(cache_dir=str(tmp_path))
+        assert iocs["_ioc_degraded"] is False
+        assert iocs["_ioc_signature_invalid"] is False
+        assert "signed-evil.com" in iocs["malicious_domains"]
+
+    def test_invalid_signature_degraded_but_hardcoded_applies(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ioc_manager, "IOC_FEED_PUBKEY_HEX", _IOC_TEST_PUB.hex())
+        feed = {"version": "test", "malicious_domains": ["poisoned.com"]}
+        _write_signed_cache(str(tmp_path), feed, tamper=True)
+        iocs = ioc_manager.get_iocs(cache_dir=str(tmp_path))
+        assert iocs["_ioc_degraded"] is True
+        assert iocs["_ioc_signature_invalid"] is True
+        # Cached (untrusted) feed contents are NOT merged...
+        assert "poisoned.com" not in iocs["malicious_domains"]
+        # ...but the hardcoded fallback IOCs still apply.
+        assert "claud-code" in iocs["malicious_npm"]
+
+    def test_missing_sig_is_legacy_not_signature_degraded(self, tmp_path, monkeypatch):
+        """A cache with NO .sig (old feed / old client) keeps merging and is not
+        flagged signature-invalid — backward compatible."""
+        monkeypatch.setattr(ioc_manager, "IOC_FEED_PUBKEY_HEX", _IOC_TEST_PUB.hex())
+        feed = {"version": "test", "malicious_domains": ["legacy-evil.com"]}
+        _write_signed_cache(str(tmp_path), feed, sign=False)
+        iocs = ioc_manager.get_iocs(cache_dir=str(tmp_path))
+        assert iocs["_ioc_signature_invalid"] is False
+        assert iocs["_ioc_degraded"] is False  # fresh JSON cache present
+        assert "legacy-evil.com" in iocs["malicious_domains"]
+
+    def test_verify_helper_states(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ioc_manager, "IOC_FEED_PUBKEY_HEX", _IOC_TEST_PUB.hex())
+        # None when no raw/sig present.
+        assert ioc_manager._verify_ioc_cache_signature(str(tmp_path)) is None
+        feed = {"version": "v", "malicious_domains": ["e.com"]}
+        _write_signed_cache(str(tmp_path), feed)
+        assert ioc_manager._verify_ioc_cache_signature(str(tmp_path)) is True
+
+    def test_extra_sig_file_does_not_break_old_path(self, tmp_path, monkeypatch):
+        """The presence of the .sig file must not break the plain cache-merge
+        path that old clients rely on (they never read it)."""
+        monkeypatch.setattr(ioc_manager, "IOC_FEED_PUBKEY_HEX", _IOC_TEST_PUB.hex())
+        feed = {"version": "v", "malicious_npm_packages": ["extra-evil"]}
+        _write_signed_cache(str(tmp_path), feed)
+        # Simulate old client: just load the JSON cache directly.
+        cached = ioc_manager._load_cache(cache_dir=str(tmp_path))
+        assert cached is not None
+        assert "extra-evil" in cached.get("malicious_npm_packages", [])

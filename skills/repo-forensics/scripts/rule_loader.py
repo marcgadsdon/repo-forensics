@@ -599,12 +599,165 @@ _INSTALL_RULEPACK_DIR = os.path.normpath(
     os.path.join(_SCRIPTS_DIR, "..", "data", "rulepacks")
 )
 
-# Cache overlay dir (seam for U6 signed-feed overlay). U6 wires verification +
-# overlay selection; for U2 this is documented but unused — load_pack only reads
-# the install dir unless an explicit base_dir is supplied (test seam).
+# Cache overlay dir (U6 signed-feed overlay). The verified bundle written by
+# rulepack_feed.accept_bundle lives here as bundle.json + bundle.json.sig.
+# load_pack re-verifies the signature on EVERY load (KTD-12) and overlays a pack
+# only when its cached pack_version is strictly newer than the shipped pack AND
+# the schema major matches AND every example self-test passes.
 CACHE_RULEPACK_DIR = os.path.join(
     os.path.expanduser("~"), ".cache", "repo-forensics", "rulepacks"
 )
+_CACHE_BUNDLE_FILE = "bundle.json"
+_CACHE_BUNDLE_SIG_FILE = "bundle.json.sig"
+
+# rule-pack-degraded flag (DISTINCT from ioc_manager's _ioc_degraded, KTD-11).
+# Set True whenever a cache bundle exists but fails verification/overlay, so the
+# scanner can surface a rule-pack-specific warning. Reset to False each time the
+# overlay verifies cleanly or no cache is present at all.
+_RULEPACK_DEGRADED = False
+# Overlay log: human-readable notes about what the last overlay attempt did
+# (which packs overlaid, any shipped-active rule arriving retired:true, any
+# rejection reason). Surfaced by callers; never raises.
+_OVERLAY_LOG = []
+
+
+def get_rulepack_degraded():
+    """True iff a rule-pack cache bundle is present but failed verification or
+    overlay (tampered / invalid signature / rollback). Callers surface a
+    rule-pack-degraded warning, distinct from the IOC-degraded message."""
+    return _RULEPACK_DEGRADED
+
+
+def get_overlay_log():
+    """Return a copy of the most recent overlay log lines (diagnostics)."""
+    return list(_OVERLAY_LOG)
+
+
+def _set_degraded(value):
+    global _RULEPACK_DEGRADED
+    _RULEPACK_DEGRADED = bool(value)
+
+
+def _overlay_note(msg):
+    _OVERLAY_LOG.append(msg)
+
+
+# Process-lifetime memo for the cache-bundle signature verification keyed on
+# (path, mtime, size) so repeated loads in one process don't re-verify the same
+# bytes needlessly (~5-20ms each, ~20 verifies per scan otherwise). KTD-12.
+_BUNDLE_VERIFY_MEMO = {}
+
+
+def _reset_overlay_state():
+    """Test helper: clear overlay memo + degraded flag + log."""
+    _BUNDLE_VERIFY_MEMO.clear()
+    _OVERLAY_LOG.clear()
+    _set_degraded(False)
+
+
+def _verified_cache_bundle(cache_dir=None):
+    """Read + verify the cached signed bundle. Returns the parsed bundle dict on
+    success, or None (and sets the degraded flag) on any failure.
+
+    Verify-on-load (KTD-12): the signature is checked over the EXACT cached raw
+    bytes EVERY call — the cache is writable by any same-user process (the
+    postinstall-malware class this tool detects). Memoized per (path, mtime,
+    size); a tamper changes mtime/size and busts the memo, forcing a re-verify
+    that then fails.
+    """
+    root = cache_dir if cache_dir is not None else CACHE_RULEPACK_DIR
+    bundle_path = os.path.join(root, _CACHE_BUNDLE_FILE)
+    sig_path = os.path.join(root, _CACHE_BUNDLE_SIG_FILE)
+    if not (os.path.isfile(bundle_path) and os.path.isfile(sig_path)):
+        return None  # no cache at all -> not degraded, shipped is the norm
+    try:
+        st = os.stat(bundle_path)
+        memo_key = (bundle_path, st.st_mtime, st.st_size)
+    except OSError:
+        _set_degraded(True)
+        return None
+    if memo_key in _BUNDLE_VERIFY_MEMO:
+        return _BUNDLE_VERIFY_MEMO[memo_key]
+    try:
+        with open(bundle_path, "rb") as f:
+            raw = f.read()
+        with open(sig_path, "rb") as f:
+            sig = f.read()
+    except OSError:
+        _set_degraded(True)
+        return None
+    # Import the verify chokepoint lazily (rulepack_feed -> _ed25519). KTD-14:
+    # rulepack_feed/_ed25519 do NOT import rule_loader's aggregation consumers,
+    # so this stays leaf-safe (it is the feed/crypto layer, not aggregation).
+    try:
+        import rulepack_feed
+        ok = rulepack_feed.verify_raw_bundle(raw, sig)
+    except Exception as e:  # never let a feed-module issue crash a scan
+        _warn(f"cache bundle verify error: {e}")
+        ok = False
+    if not ok:
+        _warn("cached rule-pack bundle signature INVALID — ignoring cache, "
+              "using shipped packs (rule-pack-degraded)")
+        _set_degraded(True)
+        _BUNDLE_VERIFY_MEMO[memo_key] = None
+        return None
+    try:
+        bundle = json.loads(raw.decode("utf-8"))
+        if not isinstance(bundle, dict):
+            raise ValueError("bundle top-level not an object")
+    except (ValueError, UnicodeDecodeError) as e:
+        _warn(f"cached rule-pack bundle parse error after verify: {e}")
+        _set_degraded(True)
+        _BUNDLE_VERIFY_MEMO[memo_key] = None
+        return None
+    _BUNDLE_VERIFY_MEMO[memo_key] = bundle
+    return bundle
+
+
+def _compiled_pack_from_bundle_entry(name, entry, source_path):
+    """Compile a pack from a verified-bundle entry into a CompiledPack, running
+    every rule's self-test. Returns (CompiledPack, None) or (None, reason).
+    Whole-pack acceptance: ANY self-test failure rejects the overlay for this
+    pack (shipped stays authoritative)."""
+    if not isinstance(entry, dict):
+        return None, "bundle entry not an object"
+    schema_version = entry.get("schema_version", RULEPACK_SCHEMA_VERSION)
+    if not isinstance(schema_version, str):
+        return None, "schema_version not a string"
+    major = schema_version.split(".")[0] if schema_version else ""
+    if major != RULEPACK_SCHEMA_VERSION.split(".")[0]:
+        return None, f"schema major mismatch ({schema_version!r})"
+    pack_version = entry.get("pack_version", 0)
+    if isinstance(pack_version, bool) or not isinstance(pack_version, int):
+        return None, "pack_version not an integer"
+    raw_rules = entry.get("rules", [])
+    if not isinstance(raw_rules, list):
+        return None, "rules not a list"
+    compiled = []
+    seen = set()
+    retired_ids = set()
+    for raw in raw_rules:
+        rule, reason = _compile_rule(raw)
+        if rule is None:
+            if reason and reason.endswith(": retired"):
+                # Track retired ids so the overlay can flag silent removal of a
+                # shipped-active rule (silent-detection-removal guard, KTD-6).
+                rid = raw.get("id") if isinstance(raw, dict) else None
+                if isinstance(rid, str) and rid:
+                    retired_ids.add(rid)
+                continue
+            return None, f"rule rejected: {reason}"
+        if rule.id in seen:
+            continue
+        seen.add(rule.id)
+        result = run_rule_self_test(rule)
+        if not result.passed:
+            return None, (f"rule {rule.id} self-test failed: "
+                          f"{'; '.join(result.failures)}")
+        compiled.append(rule)
+    cp = CompiledPack(name, pack_version, schema_version, source_path, compiled)
+    cp._retired_ids = retired_ids  # attached for the silent-removal diff
+    return cp, None
 
 
 def _pack_search_paths(name, base_dir=None):
@@ -717,7 +870,55 @@ def _load_pack_file(path):
     return CompiledPack(name, pack_version, schema_version, path, compiled)
 
 
-def load_pack(name, base_dir=None):
+def _maybe_overlay(name, shipped, cache_dir=None):
+    """Given the shipped CompiledPack for `name`, return the overlay pack from
+    the verified cache bundle IF it is strictly newer and fully valid; otherwise
+    return the shipped pack unchanged (shipped authoritative, KTD-6).
+
+    Verifies the cache bundle's signature on every call (KTD-12, memoized).
+    """
+    bundle = _verified_cache_bundle(cache_dir)
+    if bundle is None:
+        return shipped  # no cache (or invalid -> degraded flag already set)
+    packs = bundle.get("packs", {})
+    if not isinstance(packs, dict):
+        return shipped
+    entry = packs.get(name)
+    if not isinstance(entry, dict):
+        return shipped  # bundle doesn't carry this pack
+    entry_version = entry.get("pack_version", 0)
+    shipped_version = shipped.pack_version if shipped is not None else -1
+    if not isinstance(entry_version, int) or isinstance(entry_version, bool):
+        return shipped
+    if entry_version <= shipped_version:
+        return shipped  # equal/older ignored — shipped stays authoritative
+    overlay, reason = _compiled_pack_from_bundle_entry(
+        name, entry, os.path.join(
+            cache_dir if cache_dir is not None else CACHE_RULEPACK_DIR,
+            _CACHE_BUNDLE_FILE)
+    )
+    if overlay is None:
+        _warn(f"rule-pack overlay for {name!r} rejected: {reason} "
+              f"(shipped v{shipped_version} stays authoritative)")
+        _overlay_note(f"{name}: overlay REJECTED ({reason})")
+        _set_degraded(True)
+        return shipped
+    # Silent-detection-removal guard (KTD-6): a shipped-ACTIVE rule arriving
+    # retired:true in the overlay is surfaced, never silent.
+    retired = getattr(overlay, "_retired_ids", set())
+    if shipped is not None and retired:
+        shipped_active = {r.id for r in shipped.all_rules}
+        silenced = sorted(shipped_active & retired)
+        for rid in silenced:
+            _overlay_note(
+                f"{name}: shipped-active rule {rid} retired by overlay "
+                f"v{entry_version} (silent-detection-removal guard)")
+            _warn(f"overlay retires shipped-active rule {rid} in pack {name!r}")
+    _overlay_note(f"{name}: overlaid shipped v{shipped_version} -> v{entry_version}")
+    return overlay
+
+
+def load_pack(name, base_dir=None, cache_dir=None):
     """Load a rule pack by name. Returns a CompiledPack, or None if no pack file
     exists or the pack is schema-incompatible (caller falls back to shipped
     behavior).
@@ -725,6 +926,10 @@ def load_pack(name, base_dir=None):
     `base_dir` is a documented test/U6 seam: when supplied, packs resolve from
     that directory instead of the install dir. It is still resolved as an
     explicit absolute path — it is NEVER derived from a scan target or CWD.
+
+    `cache_dir` overrides the signed-feed cache location (test seam). The
+    verified cache bundle overlays a shipped pack only when strictly newer +
+    valid (KTD-6); its signature is re-verified on every load (KTD-12).
 
     Memoized per (resolved path, mtime): one process never parses a pack twice.
     """
@@ -737,17 +942,23 @@ def load_pack(name, base_dir=None):
             continue
         cache_key = (path, mtime)
         if cache_key in _PACK_CACHE:
-            return _PACK_CACHE[cache_key]
-        try:
-            pack = _load_pack_file(path)
-        except SchemaIncompatibleError as e:
-            _warn(f"{e} — falling back to shipped behavior")
-            return None
-        except (OSError, ValueError, json.JSONDecodeError) as e:
-            _warn(f"could not load pack {name!r}: {e}")
-            return None
-        _PACK_CACHE[cache_key] = pack
-        return pack
+            shipped = _PACK_CACHE[cache_key]
+        else:
+            try:
+                shipped = _load_pack_file(path)
+            except SchemaIncompatibleError as e:
+                _warn(f"{e} — falling back to shipped behavior")
+                return None
+            except (OSError, ValueError, json.JSONDecodeError) as e:
+                _warn(f"could not load pack {name!r}: {e}")
+                return None
+            _PACK_CACHE[cache_key] = shipped
+        # Overlay seam: a base_dir override (tests loading a single pack file)
+        # bypasses the cache overlay entirely — the override IS the source of
+        # truth. The signed-feed overlay only applies to install-dir loads.
+        if base_dir is not None:
+            return shipped
+        return _maybe_overlay(name, shipped, cache_dir=cache_dir)
     return None
 
 
