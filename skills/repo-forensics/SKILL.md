@@ -44,7 +44,7 @@ Deep security auditing for repositories, AI agent skills, and MCP servers.
   "Adjudication Protocol" section for the full protocol.
 - **Auto-scan hook** (v2): PostToolUse hook auto-triggers on `git clone`, `git pull`, `pip install`, `npm install/update`, `gem install/update`, `brew install/upgrade`, etc. Zero-overhead for non-matching commands.
 - **Pre-execution gate** (v2.6): PreToolUse hook blocks known-malicious packages and pipe-to-shell commands BEFORE execution. IOC-only, <10ms latency, no subprocess calls.
-- **Session security scanner** (v2.6.3): SessionStart hook detects updated plugins/skills/MCP servers, refreshes threat databases daily, runs fast IOC check + full 20-scanner deep scan on changed items. Sub-1ms when nothing changed.
+- **Session security scanner** (v2.6.3): SessionStart hook detects updated plugins/skills/MCP servers, refreshes threat databases daily, runs fast IOC check + full 25-scanner deep scan on changed items. Sub-1ms when nothing changed.
 - **.pth file injection detection** (v2): Detects liteLLM-style Python startup injection attacks (exec/eval/base64/known IOC filenames)
 - **Transitive dependency scanning** (v2): Deep-parses `package-lock.json`, `yarn.lock`, `poetry.lock`, `Pipfile.lock` for supply chain IOCs
 - **DAST scanner** (`scan_dast.py`): Dynamic analysis of Claude Code hooks with 8 malicious payload types, sandboxed execution
@@ -56,7 +56,7 @@ Deep security auditing for repositories, AI agent skills, and MCP servers.
 - **Manifest drift detection** (`scan_manifest_drift.py`): Compares declared vs actual dependencies, catches phantom deps, runtime installs, conditional import+install fallbacks
 - **MCP rug pull detection**: Tool descriptions sourced from database, network, env vars, or conditional logic
 - **Enhanced AST analysis**: 12 patterns including marshal.loads, types.CodeType, sys.addaudithook, bytes decode obfuscation, self-modification
-- **Test suite**: 1,350+ pytest tests covering all scanners
+- **Test suite**: 1,800+ pytest tests covering all scanners
 - **OpenClaw/ClawHub scanning**: Auto-detects OpenClaw skills, validates frontmatter, tools.json, SOUL.md, .clawhubignore
 - **Anti-forensics detection** (v2): Self-deleting installers, package.json overwrite, version mismatch (Axios supply chain pattern)
 - **Compromised version detection** (v2): Flags known-bad versions of legitimate packages (Axios, liteLLM, vpmdhaj OpenSearch typosquats, Miasma/Red Hat Cloud Services)
@@ -124,7 +124,7 @@ Full audit (all 25 scanners):
 ./scripts/run_forensics.sh /path/to/repo
 ```
 
-Focused AI skill scan (13 scanners, faster):
+Focused AI skill scan (15 scanners, faster):
 ```bash
 ./scripts/run_forensics.sh /path/to/repo --skill-scan
 ```

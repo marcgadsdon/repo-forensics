@@ -41,7 +41,10 @@ METRICS = os.path.join(ROOT, ".github", "badges", "metrics.json")
 def count_scanners():
     n = 0
     for fn in os.listdir(SCRIPTS):
-        if fn.startswith("scan_") and fn.endswith(".py"):
+        # scan_decode is an in-process decode-and-rescan LIBRARY invoked by
+        # other scanners, not a standalone parallel scanner -- exclude it so
+        # the count matches the documented standalone-scanner set.
+        if fn.startswith("scan_") and fn.endswith(".py") and fn != "scan_decode.py":
             with open(os.path.join(SCRIPTS, fn), encoding="utf-8") as f:
                 if re.search(r"^SCANNER_NAME\s*=", f.read(), re.M):
                     n += 1

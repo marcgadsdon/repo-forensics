@@ -1,10 +1,10 @@
 {
   "version": "2",
   "generator": "repo-forensics/verify_install",
-  "file_count": 58,
+  "file_count": 61,
   "files": {
     ".gitignore": "8b2598a3359a556874b8069d42dea2686f07d46c3ca1b540c4025788b258180a",
-    "SKILL.md": "51183fa0f1a0fcce64b83d2f965960dd76b219bff1d274f55a7ca49cdb2a41c7",
+    "SKILL.md": "3b4d4eacaa2d581e061a1a95bb5e249ad70d0d1a0a418fed10b7b6c27a746231",
     "data/README.md": "3980ad873dbef332e0db2d209cd22287d8a0d146930b40bafc8ab774166a8bc4",
     "data/compromised_versions.json": "ee676136d6b5f35d596487f91cbf0ceb25a6dcc0951c31ab6aa6e3fd8cd2586d",
     "data/rule_ids.csv": "61f3c5105accb77ca8096c734c1ee4abdf82c7364a3519404d69353bc27481de",
@@ -42,6 +42,7 @@
     "scripts/scan_bytecode.py": "c171b6250decb1ab0fc982595315014b16848f462dcf1c49c30009aa1ea44b7a",
     "scripts/scan_dast.py": "f64ca9349304797a140864346a89a9ed2fa5e133b8470c606335e8491d4d7fab",
     "scripts/scan_dataflow.py": "9944c784f5c3efe102ccf41b2f4eac24c099cc2bb48e17007fba1217bf7ad1ac",
+    "scripts/scan_decode.py": "6eebc9b28c885c3c8fb94e9ce8d210bdc657dfcb1c06f2383e81eb56be546375",
     "scripts/scan_dependencies.py": "bcfa1c10f0a2741024a5176b53dc501055a74c832a3ca6f4f59355df5b4d6e30",
     "scripts/scan_devcontainer.py": "066c27d4e4273a2d37ef3b989cd92735beba25fed1bd618111f3558e6d16ef7a",
     "scripts/scan_entropy.py": "0718e46141f37d35cea15f46344d67a514e3d2057e84df74674a494d459aa9b7",
@@ -54,10 +55,12 @@
     "scripts/scan_mcp_security.py": "96fb1405f57a4f1fb9107f6490472b73e8d7d0b0d593dc9b0c705acb2493a12a",
     "scripts/scan_oversize.py": "372842202bf5872336685e7c4354bd1e8f18a9bfcfd71d1429ba3dea6976036e",
     "scripts/scan_post_incident.py": "9ee2efc459f98bc35a0d176085e6d6fb399c263751e1d6c7616402e378527bfd",
+    "scripts/scan_provenance.py": "5305a2d2b3029b8de08855fe8d913cdae7f437becd3e002ab233a4bee670fa25",
     "scripts/scan_runtime_dynamism.py": "7e9fe4f275bc15a7419686b9891c5927267fe19fd2b32807f25d2721650218ae",
     "scripts/scan_sast.py": "47ad5473c10ac694b6b186732ea30070dd04fae12085f3a202b1f231e0b7f37e",
     "scripts/scan_secrets.py": "e7938ba74fab6509a24b56892c8cf3e496a58b3add7096982cfb6fe57a99c1e5",
     "scripts/scan_skill_threats.py": "a10f2087b79bedee5d7df6c6cc4358db7a8ed2d8295904d33e4955e7515191c7",
+    "scripts/scan_splitstream.py": "95f8b56fcfd6d3900af823269e9a6e8ef1c7a0d2b417bd1936bf0f0293175a6e",
     "scripts/session_scan.py": "f970d3f8e62b1e1df9a4bd0ed602eafe03fafcad4809ba79ba6db34b978a87ad",
     "scripts/verify_install.py": "deac3cd2726bec4a85ddf95a2e1f31d4cc5701213514cd46701efe7df8a92b73",
     "scripts/vuln_feed.py": "4f200be10655b5997796aeabef1cc7d4e6da9d5429975bfbe3f16a8e19d21031"

@@ -2,6 +2,42 @@
 
 All notable changes to repo-forensics. Versions follow semver.
 
+## [2.11.1] - 2026-06-18
+
+### Added — final two scanner-bypass detection gaps closed
+
+Closes the last two of the five CSA / Trail of Bits "AI agent skill scanner
+bypass" techniques (the first three landed in 2.11.0), taking the suite to 25
+standalone scanners.
+
+- **decode-and-rescan** (`scan_decode`): an in-process, standard-library
+  decode-and-rescan library. It decodes base64 / base85 / base32 / hex blobs
+  (recursion-, input-size-, byte- and wall-clock-bounded) and re-runs the
+  SAST/trifecta plus targeted heuristics over the decoded plaintext, so an
+  encoded payload is inspected, not just flagged. It NEVER exec/eval/compiles
+  decoded content (`ast.parse` only). Wired into the entropy, AST, and
+  skill-threats scanners through one shared per-scan budget.
+- **split-stream reassembly** (`scan_splitstream`): reassembles payloads split
+  into inert encoded fragments across unrelated files (no import edge), unions
+  same-alphabet length bands, tries a bounded set of orderings, and
+  decode-rescans the joined blob. Hard-bounded against OOM/SIGKILL; a payload
+  split into more than ~6 equal-length fragments in fully-scrambled order is a
+  documented best-effort residual.
+- **artifact provenance** (`scan_provenance`): verifies artifact signatures via
+  cosign / gh / npm / pip when present (zero added dependencies, total-time
+  budgeted). Quiet by design — only a signature that is PRESENT but FAILS
+  verification (tampering) emits, as CRITICAL; the universal unsigned state is
+  silent.
+
+### Fixed
+
+- **Silent-zero detection bypass (root cause).** `auto_scan` now fails LOUD when
+  a scanner times out, is killed by a signal, crashes, or emits unparseable
+  output, instead of returning an empty result that read as a clean verdict. A
+  repo could previously force any scanner past the wall-clock budget (or OOM it)
+  to suppress its findings silently. Memory and wall-clock are now bounded across
+  the new scanners so attacker input cannot trigger a SIGKILL/OOM silent-zero.
+
 ## [2.11.0] - 2026-06-17
 
 ### Added — three scanner-bypass detection gaps closed
