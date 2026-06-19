@@ -2,7 +2,7 @@
 
 All notable changes to repo-forensics. Versions follow semver.
 
-## [2.12.0] - 2026-06-20
+## [2.11.2] - 2026-06-20
 
 ### Added — three scanner-bypass detection classes hardened
 

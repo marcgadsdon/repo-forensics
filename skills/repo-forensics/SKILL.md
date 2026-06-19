@@ -70,9 +70,9 @@ Deep security auditing for repositories, AI agent skills, and MCP servers.
 - **process.env exposure detection** (v2.6.5): Flags console.log(process.env), JSON.stringify(process.env), and crash report env dumps
 - **Docker ARG secret detection** (v2.6.5): Catches secrets passed via ARG directives (permanently visible in docker history)
 - **1Password/Vault token detection** (v2.6.5): OP_CONNECT_TOKEN, ops_ service account tokens, hvs. Vault tokens
-- **Content-based archive detection** (v2.12): archives are identified by magic bytes (`PK`/`ustar`/gzip) and `is_zipfile`, not extension, so a zip renamed to dodge gating (e.g. a `.docx.txt`) or a polyglot/self-extracting zip is still opened and scanned. Scripts/executables smuggled inside an OOXML (Office) document are flagged HIGH on structure alone.
-- **Bytecode poisoning detection** (v2.12): a benign `.py` source shipping a malicious compiled `.pyc` (Python loads the cache over source) is caught by diffing raw `.pyc` danger markers against the sibling source — **no unmarshalling, no execution, cross-version-safe**, so the verdict never runs attacker bytecode. Best-effort multi-interpreter decode enriches the report; obfuscated `getattr`+char-built-name gadgets are also detected.
-- **Registry-hijack / dependency-confusion detection** (v2.12): npm/yarn/pip/bun registry or `index-url` redirected to a non-canonical host is flagged (MEDIUM — corporate mirrors are legitimate), escalating to HIGH only when the redirect co-occurs with reviewer-disarming assurance prose. Resolves `${VAR}` indirection; runs in the install-time hook too.
+- **Content-based archive detection** (v2.11.2): archives are identified by magic bytes (`PK`/`ustar`/gzip) and `is_zipfile`, not extension, so a zip renamed to dodge gating (e.g. a `.docx.txt`) or a polyglot/self-extracting zip is still opened and scanned. Scripts/executables smuggled inside an OOXML (Office) document are flagged HIGH on structure alone.
+- **Bytecode poisoning detection** (v2.11.2): a benign `.py` source shipping a malicious compiled `.pyc` (Python loads the cache over source) is caught by diffing raw `.pyc` danger markers against the sibling source — **no unmarshalling, no execution, cross-version-safe**, so the verdict never runs attacker bytecode. Best-effort multi-interpreter decode enriches the report; obfuscated `getattr`+char-built-name gadgets are also detected.
+- **Registry-hijack / dependency-confusion detection** (v2.11.2): npm/yarn/pip/bun registry or `index-url` redirected to a non-canonical host is flagged (MEDIUM — corporate mirrors are legitimate), escalating to HIGH only when the redirect co-occurs with reviewer-disarming assurance prose. Resolves `${VAR}` indirection; runs in the install-time hook too.
 - **25 scanners** with 41 correlation rules
 
 ## How Detection Stays Fresh
@@ -336,7 +336,7 @@ The correlation engine (`forensics_core.py`) identifies compound threats across 
 13. Pipe exfiltration + network sink = **Shell Script Data Exfiltration Chain** (critical)
 14. Tools.json poisoning + prompt injection = **Agent Skill Compound Attack** (critical)
 
-Two raw-content correlation detectors run in the aggregation/hook path alongside these rules: the **Lethal Trifecta** raw feed (exec + network + credential read), and **registry hijack** (v2.12) — a package-registry / `index-url` redirect to a non-canonical host, escalated to HIGH when it co-occurs with reviewer-disarming assurance prose (dependency-confusion social engineering).
+Two raw-content correlation detectors run in the aggregation/hook path alongside these rules: the **Lethal Trifecta** raw feed (exec + network + credential read), and **registry hijack** (v2.11.2) — a package-registry / `index-url` redirect to a non-canonical host, escalated to HIGH when it co-occurs with reviewer-disarming assurance prose (dependency-confusion social engineering).
 
 ## Adjudication Protocol
 

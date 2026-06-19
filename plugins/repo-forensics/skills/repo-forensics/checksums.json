@@ -4,7 +4,7 @@
   "file_count": 61,
   "files": {
     ".gitignore": "8b2598a3359a556874b8069d42dea2686f07d46c3ca1b540c4025788b258180a",
-    "SKILL.md": "e2f4d49945988930559bf55bf806baf383fbf7dbcba7ea7a8240fb0c2e9d94e0",
+    "SKILL.md": "f415fc5ffa343bcf80e6b28d816b78d8ac4c05826d3b1246d6726f209eba20fa",
     "data/README.md": "3980ad873dbef332e0db2d209cd22287d8a0d146930b40bafc8ab774166a8bc4",
     "data/compromised_versions.json": "ee676136d6b5f35d596487f91cbf0ceb25a6dcc0951c31ab6aa6e3fd8cd2586d",
     "data/rule_ids.csv": "61f3c5105accb77ca8096c734c1ee4abdf82c7364a3519404d69353bc27481de",
@@ -81,9 +81,9 @@
   },
   "hook_count": 8,
   "repo_manifests": {
-    ".claude-plugin/marketplace.json": "d622b05d3497815ca32c73f5b2740ceff63567fda29964c29b86409a892bbdd6",
-    ".claude-plugin/plugin.json": "bffa0d3826498cd8075cfbea7eb04949ccab3fddc729352b35fa4ea8be232cfe",
-    ".codex-plugin/plugin.json": "a5a09a99eba84a21afac39008af0e27983d7de302ab6a002b20c257c2c64b0c0"
+    ".claude-plugin/marketplace.json": "98f087617177d1f0a11ffa4afe04b7279cab25b8415f4684ce0462ebb3b6fd37",
+    ".claude-plugin/plugin.json": "f32819186cc438ab005bf250f62d0759e6055dbcd47db558ea7743dea8e1c2a9",
+    ".codex-plugin/plugin.json": "1a01e6c1f17eac97881e62f5cd436fb97512cbdfcbb20505b2ff406b44546ccf"
   },
   "manifest_count": 3,
   "repo_source_manifests": {
