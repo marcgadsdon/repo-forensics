@@ -213,6 +213,11 @@ With marketplace auto-update enabled, the first trusted SessionStart after the
 upgrade migrates and repairs them automatically. If auto-update was disabled,
 update Repo Forensics once through the agent marketplace, then start a session.
 
+A machine left disabled by a previous uninstall re-enables itself on the next
+session once Repo Forensics is installed again, so a reinstall or update clears a
+stale threat-database warning with no manual step. An explicit `disable` is
+treated as deliberate intent and stays in effect until you run `enable`.
+
 ---
 
 ## What It Finds
@@ -653,14 +658,14 @@ Defense-in-depth, not a guarantee. Always verify findings manually. See [LICENSE
 
 ## License
 
-**PolyForm Noncommercial 1.0.0**. Personal, research, education: free. Small teams (<5 people): free. Commercial: [reach out](https://linkedin.com/in/alexgreensh).
+**PolyForm Noncommercial 1.0.0**. Personal, research, education: free. Companies of fewer than 5 people (whole-company headcount, not seats): free. Commercial: [reach out](https://linkedin.com/in/alexgreensh).
 
 <details>
 <summary>License FAQ</summary>
 
 **Personal / hobby / research / education?** Go for it. No license purchase needed.
 
-**Small team (under 5 people OR under $20k/month)?** No-cost commercial license automatically. [Sponsor](https://github.com/sponsors/alexgreensh) if you want, not required.
+**Is your whole company fewer than 5 people (total headcount, not just the seats using it), or under $20k/month?** No-cost commercial license automatically. This is about the size of your entire organization, not how many people install it, so a larger company does not qualify by limiting it to a handful of users. [Sponsor](https://github.com/sponsors/alexgreensh) if you want, not required.
 
 **Growing into a business?** Built-in 32-day grace period. Reach out when ready.
 
